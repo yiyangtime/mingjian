@@ -48,6 +48,7 @@ export interface SystemInfo {
   uptime_sec: number
   now: string
   paths: { root: string; db: string; output: string; logs: string }
+  db_backend: 'sqlite' | 'postgres' | 'mysql'
   db_bytes: number
   output: { reports: number; tables: number; files: number }
   counts: Record<string, number>

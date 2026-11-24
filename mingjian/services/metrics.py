@@ -123,7 +123,7 @@ def fetch_series(code: str, market: str, limit: int = 8) -> tuple[list[dict], st
 def _fetch_series(code: str, market: str, limit: int = 8) -> tuple[list[dict], str]:
     secucode = _secucode(code, market)
     if not secucode:
-        return [], "没有证券代码：非上市主体不适用公开财报指标"
+        return [], "未匹配到上市主体：非上市或名称不精确，不适用公开财报指标"
     # filter 必须整体 quote：把引号和括号留在明文里，接口会返回 400
     url = (FIN_API
            + "?reportName=RPT_F10_FINANCE_MAINFINADATA&columns=ALL&filter="

@@ -24,7 +24,7 @@ const emit = defineEmits<{ (e: 'refresh'): void }>()
       <div class="sys"><div class="k">运行时长</div><div class="v">{{ durationText(sys.uptime_sec) }}</div></div>
       <div class="sys"><div class="k">Python / 平台</div><div class="v">{{ sys.python }} · {{ sys.platform }}</div></div>
       <div class="sys"><div class="k">定时调度</div><div class="v">{{ sys.scheduler.running ? '线程运行中' : '未启动' }}</div></div>
-      <div class="sys wide"><div class="k">数据库</div><div class="v">{{ fmtBytes(sys.db_bytes) }} · {{ sys.paths.db }}</div></div>
+      <div class="sys wide"><div class="k">数据库</div><div class="v">{{ sys.db_backend }}<template v-if="sys.db_bytes"> · {{ fmtBytes(sys.db_bytes) }}</template></div></div>
       <div class="sys wide">
         <div class="k">数据规模</div>
         <div class="v">
@@ -36,7 +36,7 @@ const emit = defineEmits<{ (e: 'refresh'): void }>()
         <div class="k">模型</div>
         <div class="v">{{ sys.llm.active ? sys.llm.model + ' · ' + sys.llm.base : '规则引擎（未接入模型）' }}</div>
       </div>
-      <div class="sys wide"><div class="k">产出目录</div><div class="v">{{ sys.paths.output }}（报告 {{ sys.output.reports }} · 事实表 {{ sys.output.tables }}）</div></div>
+      <div class="sys wide"><div class="k">产出</div><div class="v">报告 {{ sys.output.reports }} · 事实表 {{ sys.output.tables }}</div></div>
     </div>
   </section>
 </template>

@@ -55,7 +55,7 @@ def serve(port: int = 8765, host: str = "127.0.0.1", open_browser: bool = True) 
         LOG.warning("端口 %s:%s 已被占用，可能重复启动", host, port)
     url = f"http://{host}:{port}/"
     print(f"明鉴 · 产业情报 已启动： {url}")
-    print("提示：在页面输入公司名称或证券代码，服务端会真实联网采集。")
+    print("提示：在页面输入公司名称，服务端会真实联网采集。")
     print("按 Ctrl+C 停止。")
     LOG.info("服务启动 %s（FastAPI + uvicorn，根目录 %s）", url, ROOT)
     if open_browser:

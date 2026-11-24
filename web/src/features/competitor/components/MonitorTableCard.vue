@@ -22,7 +22,6 @@ const emit = defineEmits<{
       <div class="mon-tr mon-th">
         <span>公司名</span>
         <span>公司类型</span>
-        <span>代码</span>
         <span>所处产业</span>
         <span class="mc-act">操作</span>
       </div>
@@ -34,7 +33,6 @@ const emit = defineEmits<{
         <span>
           <span class="mtag" :class="m.code ? 'listed' : 'unlisted'">{{ monitorType(m) }}</span>
         </span>
-        <span class="mc-code">{{ m.code || '—' }}</span>
         <span class="mc-ind" :title="m.business || m.industry || ''">
           {{ m.industry || (enriching ? '补全中…' : '未标注') }}
         </span>
@@ -64,8 +62,8 @@ const emit = defineEmits<{
 .mon-table { flex: 1; min-width: 0; overflow-x: auto; }
 .mon-tr {
   display: grid;
-  grid-template-columns: minmax(160px, 1.5fr) 132px 88px minmax(130px, 1fr) 96px;
-  gap: 12px; align-items: center; min-width: 640px;
+  grid-template-columns: minmax(160px, 1.5fr) 132px minmax(130px, 1fr) 96px;
+  gap: 12px; align-items: center; min-width: 560px;
   padding: 10px 12px; border-bottom: 1px solid #F1F3F6; font-size: 13px;
 }
 .mon-tr:last-child { border-bottom: none; }
@@ -80,7 +78,6 @@ const emit = defineEmits<{
 .mtag { display: inline-block; font-size: 11px; border-radius: 5px; padding: 2px 7px; white-space: nowrap; }
 .mtag.listed { color: #1D4ED8; background: #EFF3FF; }
 .mtag.unlisted { color: #5B6472; background: #F2F4F7; }
-.mc-code { color: var(--sub); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .mc-ind { color: var(--sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mc-act { display: flex; justify-content: flex-end; align-items: center; gap: 7px; }
 .mon-x {

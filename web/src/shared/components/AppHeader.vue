@@ -2,6 +2,8 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import HelpDrawer from './HelpDrawer.vue'
+import NavIcon from './NavIcon.vue'
+import type { NavIconName } from './navIcons'
 import { api } from '../api'
 import { openHelp } from '../composables/help'
 
@@ -14,13 +16,13 @@ defineProps<{
 const route = useRoute()
 
 // 导航只有一份定义：改名改这里，所有页面自动一致
-const items = [
-  { to: '/', label: '公司情报' },
-  { to: '/policy', label: '政策公告' },
-  { to: '/competitor', label: '竞品周报' },
-  { to: '/metrics', label: '指标联动' },
-  { to: '/agent', label: '智能体' },
-  { to: '/settings', label: '模型配置' },
+const items: { to: string; label: string; icon: NavIconName }[] = [
+  { to: '/', label: '公司情报', icon: 'company' },
+  { to: '/policy', label: '政策公告', icon: 'policy' },
+  { to: '/competitor', label: '竞品周报', icon: 'competitor' },
+  { to: '/metrics', label: '指标联动', icon: 'metrics' },
+  { to: '/agent', label: '智能体', icon: 'agent' },
+  { to: '/settings', label: '模型配置', icon: 'settings' },
 ]
 
 const path = computed(() => route.path)
@@ -60,7 +62,8 @@ onBeforeUnmount(() => {
       </div>
       <nav class="nav">
         <RouterLink v-for="it in items" :key="it.to" :to="it.to" :class="{ on: isOn(it.to) }">
-          {{ it.label }}
+          <NavIcon :name="it.icon" />
+          <span>{{ it.label }}</span>
         </RouterLink>
       </nav>
       <div class="hstate">
@@ -139,9 +142,12 @@ onBeforeUnmount(() => {
 }
 .nav::-webkit-scrollbar { display: none; }
 .nav a {
-  font-size: 13px; color: var(--sub); text-decoration: none; padding: 8px 14px;
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; color: var(--sub); text-decoration: none; padding: 8px 13px;
   border-radius: 9px; white-space: nowrap; transition: background .14s, color .14s;
 }
+.nav a :deep(.nav-icon) { opacity: .76; transition: opacity .14s; }
+.nav a:hover :deep(.nav-icon), .nav a.on :deep(.nav-icon) { opacity: 1; }
 .nav a:hover { color: var(--ink); background: #F3F5F9; }
 .nav a.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 @media (max-width: 1180px) {

@@ -19,7 +19,7 @@ const pages = [
     <section class="hero">
       <p class="lead">输入一个公司名，程序自己联网采集、读原文、抽事实、做比对、写报告、留痕。<b>每条结论都能翻回原文。</b></p>
       <ol class="steps">
-        <li><span>1</span><div><b>选主体</b><br>在公司情报页输入公司名或证券代码。</div></li>
+        <li><span>1</span><div><b>选主体</b><br>在公司情报页输入公司名称。</div></li>
         <li><span>2</span><div><b>看执行</b><br>七步实时日志，可取消；失败或取消后能从断点续跑。</div></li>
         <li><span>3</span><div><b>核事实、导报告</b><br>点事实看证据句与原文，确认/存疑都会写审计日志。</div></li>
       </ol>

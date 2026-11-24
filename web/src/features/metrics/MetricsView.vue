@@ -372,7 +372,7 @@ onMounted(() => {
       <div class="qrow">
         <input
           v-model="company" type="text" class="company-input"
-          placeholder="输入公司名或 6 位代码"
+          placeholder="输入公司名"
           @keydown.enter="loadCompany()"
         >
         <button class="btn btn-primary" :disabled="loading || !company.trim()" @click="loadCompany()">

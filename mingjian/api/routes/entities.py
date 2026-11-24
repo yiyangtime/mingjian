@@ -99,7 +99,7 @@ def entity_profile(name: str = "", code: str = "", market: str = ""):
     """公司档案补全：代码、类型、所处产业、主营。非上市退回企业自述档案。"""
     name, code, market = name.strip(), code.strip(), market.strip()
     if not name and not code:
-        raise HTTPException(400, "请提供公司名称或股票代码")
+        raise HTTPException(400, "请提供公司名称")
     cache_key = f"{code}|{market}" if code else name
     hit = profile_cache.get(cache_key)
     if hit and time.time() - hit[0] < PROFILE_TTL:

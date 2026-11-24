@@ -1,11 +1,15 @@
 """
 全局配置。全部可通过环境变量或 config.json 覆盖，便于交付后甲方自行调整。
+
+模型接入配置例外：页面保存的配置存数据库（settings 表）并优先生效，
+环境变量与 config.json 只在该库还没有模型配置时作为兜底。
 """
 from __future__ import annotations
 
 import json
 import os
 import pathlib
+import urllib.parse
 from dataclasses import asdict, dataclass
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -16,6 +20,25 @@ for _d in (DATA_DIR, OUT_DIR):
 
 DB_PATH = DATA_DIR / "mingjian.db"
 CONFIG_PATH = ROOT / "config.json"
+
+
+def mask_db_url(url: str) -> str:
+    """隐去连接串里的密码，供日志与接口展示。"""
+    if not url or "://" not in url:
+        return url
+    try:
+        p = urllib.parse.urlsplit(url)
+        port = f":{p.port}" if p.port else ""
+    except ValueError:
+        return url
+    if not p.password:
+        return url
+    user = urllib.parse.unquote(p.username or "")
+    host = p.hostname or ""
+    if ":" in host:                       # IPv6 字面量
+        host = f"[{host}]"
+    netloc = f"{user}:***@{host}{port}"
+    return urllib.parse.urlunsplit((p.scheme, netloc, p.path, p.query, p.fragment))
 
 
 @dataclass
@@ -37,11 +60,14 @@ class Config:
     min_fact_conf: float = 0.45    # 低于此置信度只进复核区，不进事实区
     max_facts: int = 30            # 报告引用事实上限
 
-    # 模型（可选）。留空则使用规则引擎，全链路仍可跑通
+    # 模型（可选）。页面保存的配置存 settings 表并优先；这里只作兜底，留空则走规则引擎
     llm_base: str = ""             # 例：https://api.deepseek.com/v1
     llm_key: str = ""
     llm_model: str = ""
     llm_timeout: float = 90.0
+
+    # 数据库（可选）。留空则使用 data/mingjian.db；支持 sqlite / postgresql / mysql
+    db_url: str = ""
 
     @property
     def llm_enabled(self) -> bool:
@@ -51,6 +77,8 @@ class Config:
         d = asdict(self)
         if d.get("llm_key"):
             d["llm_key"] = "***"
+        if d.get("db_url"):
+            d["db_url"] = mask_db_url(d["db_url"])
         return d
 
 
@@ -77,6 +105,7 @@ def load() -> Config:
         "LLM_BASE": ("llm_base", str),
         "LLM_KEY": ("llm_key", str),
         "LLM_MODEL": ("llm_model", str),
+        "DB_URL": ("db_url", str),
     }
     for suffix, (attr, caster) in env_map.items():
         for prefix in ("MINGJIAN_", "AGENT_"):
@@ -109,3 +138,4 @@ def load() -> Config:
 
 
 CFG = load()
+DB_URL = CFG.db_url          # 空串表示使用本地 SQLite（DB_PATH）

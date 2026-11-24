@@ -79,8 +79,7 @@ def _policy_scan(_args: dict) -> dict:
         row["id"] = d.get("id") or ""
         row["evidence_level"] = d.get("evidence_level") or ""
         slim.append(row)
-    return {"files": len(docs), "stats": policy.stats(docs), "skipped": skipped,
-            "dir": str(ROOT / "materials"), "docs": slim}
+    return {"files": len(docs), "stats": policy.stats(docs), "skipped": skipped, "docs": slim}
 
 
 def _metric_query(args: dict) -> dict:

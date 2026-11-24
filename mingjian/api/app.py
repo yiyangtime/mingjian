@@ -18,7 +18,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .. import __version__
 from ..config import ROOT
 from ..core.log import get as _get_logger
-from ..infra import scheduler, store
+from ..infra import llmcfg, scheduler, store
 from ..runtime import jobs
 from .routes import register_all
 
@@ -43,6 +43,8 @@ TAGS = [
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     store.init()
+    # 模型配置以库为准：启动时读回生效项（首次会把 config.json 的旧配置迁入）
+    llmcfg.bootstrap()
     # 上次进程留下的 queued/running 已经没有线程在跑，先落成失败，避免前端无限轮询
     stale = store.reconcile_interrupted_runs()
     if stale:

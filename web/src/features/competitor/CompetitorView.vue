@@ -862,7 +862,7 @@ onBeforeUnmount(() => {
         <div class="pk-sea">
           <input
             ref="pkInput" v-model="pkQ" class="fi" type="search"
-            placeholder="公司简称、全称或股票代码" autocomplete="off"
+            placeholder="公司简称或全称" autocomplete="off"
           >
           <span v-if="pkBusy" class="pk-busy">检索中…</span>
         </div>
@@ -937,11 +937,7 @@ onBeforeUnmount(() => {
               <option value="上市公司 · 北交所">上市公司 · 北交所</option>
             </select>
           </div>
-          <div class="mf">
-            <label>股票代码</label>
-            <input v-model.trim="monForm.code" class="fi" type="text" placeholder="6 位代码，非上市可留空">
-          </div>
-          <div class="mf">
+          <div class="mf wide">
             <label>所处产业</label>
             <input v-model.trim="monForm.industry" class="fi" type="text" placeholder="如 电力设备-电池">
           </div>
@@ -1066,7 +1062,7 @@ onBeforeUnmount(() => {
 .fi:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(26, 109, 213, .10); }
 .fi-days { width: 110px; font-size: 14px; }
 
-/* 监测对象：列表（公司名 / 类型 / 代码 / 产业） */
+/* 监测对象：列表（公司名 / 类型 / 产业） */
 .mon-top {
   display: flex; align-items: flex-end; justify-content: space-between;
   gap: 14px; flex-wrap: wrap; margin-bottom: 12px;

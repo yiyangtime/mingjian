@@ -23,7 +23,7 @@ def policy_scan():
     for i, d in enumerate(docs, 1):
         d["id"] = "D%02d" % i
     return {"docs": docs, "stats": policy.stats(docs), "skipped": skipped,
-            "dir": str(POLICY_DIR), "files": len(docs)}
+            "dir": POLICY_DIR.name, "files": len(docs)}
 
 
 @router.get("/api/policy/audit")

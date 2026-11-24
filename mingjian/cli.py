@@ -7,6 +7,7 @@
     python -m mingjian ls
     python -m mingjian show R20261118...
     python -m mingjian sched --company 某某科技 --daily --time 09:00
+    python -m mingjian db --counts
     python -m mingjian serve --port 8765
 
 输出同时落盘到 output/，报告可直接发给业务方。
@@ -19,7 +20,8 @@ import sys
 import time
 
 from .config import CFG, OUT_DIR
-from .infra import store
+from .infra import db as dbmod
+from .infra import llmcfg, store
 from .runtime import pipeline
 
 
@@ -132,6 +134,41 @@ def cmd_ls(args) -> int:
         stats = json.loads(r.get("stats") or "{}")
         n = stats.get("facts", "-")
         print(f"{r['id']:<24}{r['company']:<12}{r['status']:<8}{r['started_at']:<21}事实 {n}")
+    return 0
+
+
+def cmd_db(args) -> int:
+    """查看当前数据库、建表与行数。换库只改配置，不改代码。"""
+    try:
+        dialect = store.dialect()
+    except ValueError as e:
+        print(f"配置错误：{e}")
+        return 2
+    print(f"方言：{dialect}")
+    print(f"目标：{store.target()}")
+    try:
+        version = store.conn().version()
+    except dbmod.DriverMissing as e:
+        print(str(e))
+        return 2
+    except Exception as e:  # noqa: BLE001
+        print(f"连接失败：{type(e).__name__}: {e}")
+        return 3
+    print(f"版本：{version}")
+    if args.init:
+        store.init(force=True)
+        print(f"建表：完成（{len(store.ddl_statements())} 条语句）")
+    try:
+        store.conn().execute("SELECT COUNT(*) AS n FROM runs").fetchone()
+    except Exception as e:  # noqa: BLE001
+        print(f"表未建立或不可读：{type(e).__name__}: {e}")
+        print("可先执行：python -m mingjian db --init")
+        return 4
+    counts = store.table_counts()
+    print(f"表：{len(counts)} 张，共 {sum(counts.values())} 行")
+    if args.counts:
+        for name, n in counts.items():
+            print(f"  {name:<12}{n}")
     return 0
 
 
@@ -448,7 +485,7 @@ def main(argv=None) -> int:
     sub = p.add_subparsers(dest="cmd")
 
     r = sub.add_parser("run", help="运行一次情报分析")
-    r.add_argument("company", help="公司名称或 6 位证券代码")
+    r.add_argument("company", help="公司名称")
     r.add_argument("--days", type=int, default=CFG.days, help="回溯天数")
     r.add_argument("--fetch", type=int, default=CFG.max_fetch, help="正文抓取条数上限")
     r.add_argument("--news", type=int, default=CFG.max_news, help="资讯条数上限")
@@ -532,6 +569,11 @@ def main(argv=None) -> int:
     sc.add_argument("--run-now", default="", help="立即在本地执行一次指定任务")
     sc.set_defaults(func=cmd_sched)
 
+    d = sub.add_parser("db", help="查看当前数据库、建表与行数（默认 SQLite，可切 PostgreSQL / MySQL）")
+    d.add_argument("--init", action="store_true", help="按当前连接串建表（幂等）")
+    d.add_argument("--counts", action="store_true", help="逐表打印行数")
+    d.set_defaults(func=cmd_db)
+
     args = p.parse_args(argv)
     if not getattr(args, "func", None):
         p.print_help()
@@ -540,7 +582,10 @@ def main(argv=None) -> int:
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
-    store.init()
+    # db 子命令自己连库并给友好提示；其余命令先保证表已建好，并读回库里的模型配置
+    if args.cmd != "db":
+        store.init()
+        llmcfg.bootstrap()
     return args.func(args)
 
 

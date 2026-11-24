@@ -22,7 +22,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from mingjian.core import context  # noqa: E402
-from mingjian.infra import scheduler, store  # noqa: E402
+from mingjian.infra import llmcfg, scheduler, store  # noqa: E402
 from mingjian.infra.sources import cninfo  # noqa: E402
 from mingjian.runtime import compare  # noqa: E402
 from mingjian.services import discover, extract, govpolicy, memory, metrics, skills, subject, topic  # noqa: E402
@@ -330,8 +330,9 @@ def _memory_roundtrip():
     import shutil
     import tempfile
     tmpdir = pathlib.Path(tempfile.mkdtemp(prefix="mingjian_mem_"))
-    old_path, old_conn = store.DB_PATH, getattr(store._local, "conn", None)
+    old_path, old_url, old_conn = store.DB_PATH, store.DB_URL, getattr(store._local, "conn", None)
     store.DB_PATH = tmpdir / "t.db"
+    store.DB_URL = ""
     store._local.conn = None
     try:
         store.init()
@@ -352,6 +353,7 @@ def _memory_roundtrip():
             store._local.conn.close()
         store._local.conn = old_conn
         store.DB_PATH = old_path
+        store.DB_URL = old_url
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
@@ -360,8 +362,9 @@ def _memory_harvest():
     import shutil
     import tempfile
     tmpdir = pathlib.Path(tempfile.mkdtemp(prefix="mingjian_hv_"))
-    old_path, old_conn = store.DB_PATH, getattr(store._local, "conn", None)
+    old_path, old_url, old_conn = store.DB_PATH, store.DB_URL, getattr(store._local, "conn", None)
     store.DB_PATH = tmpdir / "t.db"
+    store.DB_URL = ""
     store._local.conn = None
     try:
         store.init()
@@ -388,6 +391,7 @@ def _memory_harvest():
             store._local.conn.close()
         store._local.conn = old_conn
         store.DB_PATH = old_path
+        store.DB_URL = old_url
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
@@ -427,8 +431,9 @@ def _store_events():
     import shutil
     import tempfile
     tmpdir = pathlib.Path(tempfile.mkdtemp(prefix="mingjian_test_"))
-    old_path, old_conn = store.DB_PATH, getattr(store._local, "conn", None)
+    old_path, old_url, old_conn = store.DB_PATH, store.DB_URL, getattr(store._local, "conn", None)
     store.DB_PATH = tmpdir / "t.db"
+    store.DB_URL = ""
     store._local.conn = None
     try:
         store.init()
@@ -459,6 +464,7 @@ def _store_events():
             store._local.conn.close()
         store._local.conn = old_conn
         store.DB_PATH = old_path
+        store.DB_URL = old_url
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
@@ -470,8 +476,9 @@ def _server_events():
     from mingjian import server
 
     tmpdir = pathlib.Path(tempfile.mkdtemp(prefix="mingjian_srv_"))
-    old_path, old_conn = store.DB_PATH, getattr(store._local, "conn", None)
+    old_path, old_url, old_conn = store.DB_PATH, store.DB_URL, getattr(store._local, "conn", None)
     store.DB_PATH = tmpdir / "t.db"
+    store.DB_URL = ""
     store._local.conn = None
     try:
         store.init()
@@ -492,6 +499,160 @@ def _server_events():
             store._local.conn.close()
         store._local.conn = old_conn
         store.DB_PATH = old_path
+        store.DB_URL = old_url
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------- 数据库方言
+
+@case("数据库方言：占位符转译、upsert 语句、密码隐去")
+def _db_dialects():
+    from mingjian.config import mask_db_url
+    from mingjian.infra import db as dbmod
+
+    assert dbmod.dialect_of("") == "sqlite"
+    assert dbmod.dialect_of("sqlite:///data/x.db") == "sqlite"
+    assert dbmod.dialect_of("postgresql://u:p@h:5432/d") == "postgres"
+    assert dbmod.dialect_of("mysql://u:p@h:3306/d") == "mysql"
+
+    # 字符串字面量里的 ? 不能被替换；引号内的 '' 转义要正确跳过
+    assert dbmod.translate_sql("SELECT '?' , ? FROM t", "postgres") == "SELECT '?' , %s FROM t"
+    assert dbmod.translate_sql("SELECT 'it''s ?', ?", "mysql") == "SELECT 'it''s ?', %s"
+    assert dbmod.translate_sql("SELECT ?", "sqlite") == "SELECT ?"
+
+    # MySQL 保留字 key 加反引号；按完整标识符匹配，不误伤 dedupe_key / entity_key
+    assert (dbmod.translate_sql("SELECT key FROM subjects WHERE key=?", "mysql")
+            == "SELECT `key` FROM subjects WHERE `key`=%s")
+    assert (dbmod.translate_sql("SELECT dedupe_key FROM facts WHERE entity_key=?", "mysql")
+            == "SELECT dedupe_key FROM facts WHERE entity_key=%s")
+    assert (dbmod.translate_sql("SELECT key FROM subjects WHERE key=?", "postgres")
+            == "SELECT key FROM subjects WHERE key=%s")
+
+    # 字面量百分号要转义，否则 PyMySQL / psycopg 会当成参数格式符
+    assert (dbmod.translate_sql("SELECT * FROM runs WHERE company LIKE '%科技%' AND id=?", "mysql")
+            == "SELECT * FROM runs WHERE company LIKE '%%科技%%' AND id=%s")
+    assert dbmod.like_op("postgres") == "ILIKE"
+    assert dbmod.like_op("sqlite") == dbmod.like_op("mysql") == "LIKE"
+
+    cols = ("id", "run_id", "seq")
+    pg = dbmod.upsert_sql("run_events", cols, ("run_id", "seq"), "postgres")
+    assert pg.startswith("INSERT INTO run_events"), pg
+    assert "ON CONFLICT (run_id, seq) DO UPDATE SET" in pg, pg
+    assert "id=EXCLUDED.id" in pg and "seq=EXCLUDED.seq" not in pg, pg
+    assert dbmod.upsert_sql("t", cols, ("run_id", "seq"), "sqlite").startswith("INSERT OR REPLACE INTO")
+    assert dbmod.upsert_sql("t", cols, ("run_id", "seq"), "mysql").startswith("REPLACE INTO")
+
+    assert mask_db_url("postgresql://u:secret@h:5432/d") == "postgresql://u:***@h:5432/d"
+    assert mask_db_url("sqlite:///data/x.db") == "sqlite:///data/x.db"
+
+
+@case("数据库初始化：重复调用不重复建表，建表后读写正常")
+def _db_init_twice():
+    import shutil
+    import tempfile
+    tmpdir = pathlib.Path(tempfile.mkdtemp(prefix="mingjian_init_"))
+    old_path, old_url, old_conn = store.DB_PATH, store.DB_URL, getattr(store._local, "conn", None)
+    store.DB_PATH = tmpdir / "t.db"
+    store.DB_URL = ""
+    store._local.conn = None
+    try:
+        store.init()
+        store.init()               # 缓存命中，不应重复执行 DDL 或报错
+        store.init(force=True)     # 显式重建也应幂等
+        assert store.table_counts()["runs"] == 0
+        store.create_run("T20260101000000-0001", "000000", "某某科技", {})
+        assert store.count_runs() == 1
+        assert store.dialect() == "sqlite" and store.db_size() > 0
+    finally:
+        if getattr(store._local, "conn", None) is not None:
+            store._local.conn.close()
+        store._local.conn = old_conn
+        store.DB_PATH = old_path
+        store.DB_URL = old_url
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@case("模型配置：落库、重启恢复与停用优先")
+def _llm_settings():
+    import shutil
+    import tempfile
+
+    from mingjian.config import CFG
+
+    tmpdir = pathlib.Path(tempfile.mkdtemp(prefix="mingjian_llm_"))
+    old_path, old_url, old_conn = store.DB_PATH, store.DB_URL, getattr(store._local, "conn", None)
+    old_cfg = (CFG.llm_base, CFG.llm_key, CFG.llm_model, CFG.llm_timeout)
+    store.DB_PATH = tmpdir / "t.db"
+    store.DB_URL = ""
+    store._local.conn = None
+    try:
+        out = llmcfg.save_profile({"base": "https://example.invalid/v1",
+                                   "key": "sk-test-1234", "model": "test-model"})
+        assert out["active"] and out["model"] == "test-model", out
+        assert out["profiles"][0]["key_hint"].endswith("1234"), out
+        assert "key" not in out["profiles"][0], out        # 页面不回传明文
+        row = store.get_setting("llm")
+        assert row["profiles"][0]["key"] == "sk-test-1234", row
+
+        # 模拟重启：内存清空后从库里恢复
+        CFG.llm_base = CFG.llm_key = CFG.llm_model = ""
+        llmcfg.bootstrap()
+        assert CFG.llm_enabled and CFG.llm_model == "test-model", CFG.to_dict()
+
+        # 停用落库：环境变量再兜底也不能把模型顶回来
+        llmcfg.clear()
+        CFG.llm_base, CFG.llm_key, CFG.llm_model = "https://env.invalid/v1", "sk-env", "env-model"
+        llmcfg.bootstrap()
+        assert not CFG.llm_enabled, CFG.to_dict()
+
+        # 停用不删配置，重新启用即可恢复
+        out = llmcfg.activate(out["profiles"][0]["id"])
+        assert out["active"] and CFG.llm_model == "test-model", out
+    finally:
+        if getattr(store._local, "conn", None) is not None:
+            store._local.conn.close()
+        store._local.conn = old_conn
+        store.DB_PATH = old_path
+        store.DB_URL = old_url
+        CFG.llm_base, CFG.llm_key, CFG.llm_model, CFG.llm_timeout = old_cfg
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@case("模型配置：旧 config.json 首次读取时迁入数据库")
+def _llm_migrate():
+    import json
+    import shutil
+    import tempfile
+
+    tmpdir = pathlib.Path(tempfile.mkdtemp(prefix="mingjian_mig_"))
+    old_path, old_url, old_conn = store.DB_PATH, store.DB_URL, getattr(store._local, "conn", None)
+    old_conf = llmcfg.CONFIG_PATH
+    conf = tmpdir / "config.json"
+    store.DB_PATH = tmpdir / "t.db"
+    store.DB_URL = ""
+    store._local.conn = None
+    llmcfg.CONFIG_PATH = conf
+    try:
+        conf.write_text(json.dumps({"llm_base": "https://legacy.invalid/v1",
+                                    "llm_key": "sk-legacy-9999", "llm_model": "legacy-model",
+                                    "llm_timeout": 60}), encoding="utf-8")
+        shown = llmcfg.public()
+        assert shown["profiles"][0]["model"] == "legacy-model", shown
+        assert shown["profiles"][0]["key_hint"].endswith("9999"), shown
+        assert store.get_setting("llm")["profiles"][0]["key"] == "sk-legacy-9999"
+
+        # 迁入之后以库为准：再改 config.json 不影响页面
+        conf.write_text(json.dumps({"llm_base": "https://other.invalid/v1",
+                                    "llm_key": "sk-other-0000",
+                                    "llm_model": "other-model"}), encoding="utf-8")
+        assert llmcfg.public()["profiles"][0]["model"] == "legacy-model"
+    finally:
+        if getattr(store._local, "conn", None) is not None:
+            store._local.conn.close()
+        store._local.conn = old_conn
+        store.DB_PATH = old_path
+        store.DB_URL = old_url
+        llmcfg.CONFIG_PATH = old_conf
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 

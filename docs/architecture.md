@@ -14,7 +14,7 @@ api → runtime → services → infra → core
 | 层 | 职责 | 只允许依赖 | 典型改动 |
 |---|---|---|---|
 | `core` | 与业务无关的基础能力：日志、HTTP、文本清洗、PDF 文本还原、上下文预算 | 标准库 + `config` | 换 HTTP 客户端、调预算算法 |
-| `infra` | 外部世界适配器：SQLite、巨潮 / 东财、模型服务、定时调度 | `core` | 新增数据源、换存储实现 |
+| `infra` | 外部世界适配器：数据库（SQLite / PostgreSQL / MySQL）、巨潮 / 东财、模型服务、定时调度 | `core` | 新增数据源、换存储实现 |
 | `services` | 领域规则：抽取、分类、归因、成稿、政策解析，不感知 HTTP | `core` + `infra` | 改判定规则、加对比维度 |
 | `runtime` | 长流程编排：七步管道、竞品对比、作业队列与断点 | 以上全部 | 调步骤顺序、加检查点 |
 | `api` | 协议层：路由、参数校验、统一错误形状与缓存头 | 以上全部 | 加接口、改返回形状 |
@@ -25,7 +25,7 @@ api → runtime → services → infra → core
 
 ```text
 mingjian/                    后端包
-├── config.py                唯一配置源（config.json + 环境变量）
+├── config.py                运行配置（config.json + 环境变量）
 ├── core/
 │   ├── log.py               日志与轮转
 │   ├── net.py               HTTP 会话、重试、限速、字符集处理
@@ -33,9 +33,11 @@ mingjian/                    后端包
 │   ├── pdftext.py           PDF 文本层还原
 │   └── context.py           模型上下文预算（中文按字，其它按 4 字符）
 ├── infra/
-│   ├── store.py             SQLite 十一表与全部 SQL
+│   ├── store.py             十二表与全部 SQL（运行期）
+│   ├── db.py                连接层：方言识别、占位符转译、事务与行工厂
+│   ├── schema.py            表结构的单一来源，渲染 SQLite / PostgreSQL / MySQL 方言
 │   ├── llm.py               OpenAI 兼容调用与返回校验
-│   ├── llmcfg.py            服务商预设、多套配置、连接测试
+│   ├── llmcfg.py            服务商预设、多套配置、连接测试（落 settings 表）
 │   ├── scheduler.py         每天 / 每周表达式
 │   └── sources/
 │       ├── cninfo.py        巨潮：实体解析、公告列表与 PDF
@@ -106,6 +108,17 @@ web/                         前端工程
 | `checkpoints` | 第 1–4 步检查点 | 主键 `(run_id, step)` |
 | `schedules` | 定时任务 | 由 serve 进程的调度线程触发 |
 | `memory` | 跨运行记忆（摘要 + 引用） | 只存摘要，不替代 `facts` |
+| `settings` | 运行期配置（当前是模型接入配置） | 键唯一，值为 JSON 原文 |
+
+运行期默认连本地 SQLite，也可通过 `db_url` 切到 PostgreSQL / MySQL，业务代码只写一种
+SQL。表结构在 `infra/schema.py` 里定义一份，可渲染成三种方言，生成 `sql/` 下的
+初始化脚本；运行期 SQLite 建表语句仍写在 `infra/store.py`，两边由
+`python tools/dbinit.py --check` 做强一致校验。方言差异与切换步骤见
+[database.md](database.md)。
+
+模型接入配置也存在 `settings` 表（键 `llm`）：页面保存即落库，重启由
+`llmcfg.bootstrap()` 读回；`config.json` 的 `llm_*` 与 `MINGJIAN_LLM_*` 只在库里
+还没有配置时兜底，页面里「停用」会落库，重启后不会被环境变量顶回。
 
 ## 五、并发模型
 

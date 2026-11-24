@@ -152,7 +152,7 @@ def gaps(facts: list[dict], docs: list[dict], changes: dict, entity: dict) -> li
     if img_pdf:
         out.append(f"{len(img_pdf)} 份公告 PDF 为图片型（无文本层），程序无法读取，已保留链接供人工查阅。")
     if not entity.get("code"):
-        out.append("未匹配到证券代码：非上市公司或名称不精确，公告与行情数据缺失。")
+        out.append("未匹配到上市主体：非上市公司或名称不精确，公告与行情数据缺失。")
     return out
 
 
@@ -182,7 +182,8 @@ def render_markdown(*, company: str, entity: dict, profile: dict, quote: dict,
     A("")
     A("| 项目 | 内容 |")
     A("|---|---|")
-    A(f"| 证券代码 | {entity.get('code') or '—'}（{entity.get('market') or '—'}） |")
+    if entity.get("code"):
+        A(f"| 证券代码 | {entity['code']}（{entity.get('market') or '—'}） |")
     A(f"| 公司全称 | {profile.get('full_name') or '—'} |")
     A(f"| 所属行业 | {profile.get('industry') or '—'} |")
     if profile.get("main_business"):

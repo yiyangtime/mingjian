@@ -1,5 +1,6 @@
 """
-SQLite 持久层。十一张表对应需求文档里"可追溯"的最小集合：
+持久层。默认连本地 SQLite，可通过 db_url 切到 PostgreSQL / MySQL：
+十二张表对应需求文档里"可追溯"的最小集合：
 
 entities    公司实体（一次解析，长期复用）
 runs        每次运行的元信息（谁、何时、参数、统计）
@@ -12,18 +13,21 @@ checkpoints 步骤级检查点（断点续跑只重跑未完成的步骤）
 schedules   定时任务定义（每天/每周，由 serve 进程执行）
 subjects    非上市主体自述档案（我方基线，标注为企业自述）
 memory      跨运行记忆（事实摘要、判断口径、偏好），带引用与命中计数
+settings    运行期配置（模型接入等），值为 JSON 原文
 
 关键约束：facts 必须挂 doc_id，documents 必须留 url。没有来源的事实不入库。
 """
 from __future__ import annotations
 
 import json
-import sqlite3
+import pathlib
 import threading
 import time
 from contextlib import contextmanager
 
-from ..config import DB_PATH
+from ..config import DB_PATH, DB_URL
+from . import db as dbmod
+from . import schema as schemadef
 
 _local = threading.local()
 
@@ -169,6 +173,12 @@ CREATE TABLE IF NOT EXISTS memory (
 );
 CREATE INDEX IF NOT EXISTS idx_memory_scope ON memory(scope);
 CREATE INDEX IF NOT EXISTS idx_memory_kind ON memory(kind);
+
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,          -- 配置键，如 llm（模型接入配置）
+  value TEXT NOT NULL,           -- JSON 原文
+  updated_at TEXT NOT NULL
+);
 """
 
 
@@ -176,13 +186,38 @@ def now() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def conn() -> sqlite3.Connection:
+def dialect() -> str:
+    """当前库的方言：sqlite / postgres / mysql。"""
+    return dbmod.dialect_of(DB_URL)
+
+
+def target() -> str:
+    """当前库的可展示标识；服务端连接串中的密码会被隐去。"""
+    return dbmod.target_of(DB_URL, DB_PATH)
+
+
+def db_size() -> int:
+    """SQLite 库文件大小；服务端数据库没有单一文件，返回 0。"""
+    if dialect() != dbmod.SQLITE:
+        return 0
+    path = dbmod.sqlite_path(DB_URL) if DB_URL else str(DB_PATH)
+    try:
+        return pathlib.Path(path).stat().st_size
+    except OSError:
+        return 0
+
+
+def ddl_statements() -> list[str]:
+    """建表语句：SQLite 用带中文注释的 SCHEMA，另两种方言由 schema.py 渲染。"""
+    if dialect() == dbmod.SQLITE:
+        return [s for s in SCHEMA.split(";") if s.strip()]
+    return schemadef.ddl(dialect())
+
+
+def conn() -> dbmod.Conn:
     c = getattr(_local, "conn", None)
     if c is None:
-        c = sqlite3.connect(str(DB_PATH), timeout=20, check_same_thread=False)
-        c.row_factory = sqlite3.Row
-        c.execute("PRAGMA journal_mode=WAL")
-        c.execute("PRAGMA synchronous=NORMAL")
+        c = dbmod.connect(DB_PATH, DB_URL)
         _local.conn = c
     return c
 
@@ -190,6 +225,7 @@ def conn() -> sqlite3.Connection:
 @contextmanager
 def tx():
     c = conn()
+    c.begin()
     try:
         yield c
         c.commit()
@@ -198,9 +234,23 @@ def tx():
         raise
 
 
-def init() -> None:
+_ready: tuple[str, str] | None = None
+
+
+def init(force: bool = False) -> None:
+    """建表（幂等）。同一目标只执行一次 DDL，避免每次读写都往返一轮。
+
+    `force=True` 供命令行显式重建；换库或换 test 临时路径时缓存键不匹配，
+    会自动重新建表。
+    """
+    global _ready
+    key = (DB_URL, str(DB_PATH))
+    if _ready == key and not force:
+        return
     with tx() as c:
-        c.executescript(SCHEMA)
+        for stmt in ddl_statements():
+            c.execute(stmt)
+    _ready = key
 
 
 # ---------------- entities ----------------
@@ -276,7 +326,8 @@ def _run_where(q: str = "", status: str = "") -> tuple[str, list]:
     clauses, args = [], []
     if q:
         like = f"%{q}%"
-        clauses.append("(company LIKE ? OR id LIKE ? OR entity_key LIKE ?)")
+        op = dbmod.like_op(dialect())        # PostgreSQL 用 ILIKE，搜索不分大小写
+        clauses.append(f"(company {op} ? OR id {op} ? OR entity_key {op} ?)")
         args += [like, like, like]
     if status:
         clauses.append("status = ?")
@@ -295,8 +346,8 @@ def list_runs(limit: int = 30, offset: int = 0, q: str = "", status: str = ""):
 
 def count_runs(q: str = "", status: str = "") -> int:
     where, args = _run_where(q, status)
-    row = conn().execute(f"SELECT COUNT(*) FROM runs{where}", args).fetchone()
-    return int(row[0] if row else 0)
+    row = conn().execute(f"SELECT COUNT(*) AS n FROM runs{where}", args).fetchone()
+    return int(row["n"] if row else 0)
 
 
 def reconcile_interrupted_runs() -> int:
@@ -318,23 +369,47 @@ def table_counts() -> dict:
     """各表行数，供系统状态页展示；单表损坏不影响其它表。"""
     out = {}
     for name in ("entities", "runs", "documents", "facts", "snapshots", "audit",
-                 "run_events", "checkpoints", "schedules", "subjects", "memory"):
+                 "run_events", "checkpoints", "schedules", "subjects", "memory",
+                 "settings"):
         try:
-            row = conn().execute(f"SELECT COUNT(*) FROM {name}").fetchone()
-            out[name] = int(row[0] if row else 0)
+            row = conn().execute(f"SELECT COUNT(*) AS n FROM {name}").fetchone()
+            out[name] = int(row["n"] if row else 0)
         except Exception:  # noqa: BLE001
             out[name] = 0
     return out
 
 
+# ---------------- settings ----------------
+
+
+def get_setting(key: str):
+    """读一条配置；不存在或 JSON 坏掉时返回 None。"""
+    row = conn().execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    if not row:
+        return None
+    try:
+        return json.loads(row["value"] or "null")
+    except Exception:
+        return None
+
+
+def put_setting(key: str, value) -> None:
+    """整条覆盖写。配置量很小，单行 JSON 比逐字段建表更好演进。"""
+    with tx() as c:
+        c.execute(dbmod.upsert_sql("settings", ("key", "value", "updated_at"), ("key",), c.dialect),
+                  (key, json.dumps(value, ensure_ascii=False), now()))
+
+
 # ---------------- documents ----------------
+
+_DOC_COLS = ("id", "run_id", "entity_key", "kind", "title", "url", "source",
+             "published_at", "body", "evidence_level", "fetched_at", "extra")
+
 
 def add_document(doc: dict) -> None:
     with tx() as c:
         c.execute(
-            "INSERT OR REPLACE INTO documents "
-            "(id,run_id,entity_key,kind,title,url,source,published_at,body,evidence_level,fetched_at,extra) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            dbmod.upsert_sql("documents", _DOC_COLS, ("id",), c.dialect),
             (doc["id"], doc["run_id"], doc["entity_key"], doc["kind"], doc.get("title", ""),
              doc.get("url", ""), doc.get("source", ""), doc.get("published_at", ""),
              doc.get("body", ""), doc.get("evidence_level", "title"), doc.get("fetched_at", now()),
@@ -358,6 +433,11 @@ def facts_of_run(run_id: str):
     return [dict(r) for r in rows]
 
 
+_FACT_COLS = ("id", "run_id", "entity_key", "doc_id", "type", "type_label", "statement",
+              "evidence_quote", "amount", "event_date", "confidence", "dedupe_key",
+              "corroboration", "created_at")
+
+
 def save_facts(run_id: str, entity_key: str, facts: list[dict]) -> None:
     """整批替换某次运行的事实。
 
@@ -370,9 +450,7 @@ def save_facts(run_id: str, entity_key: str, facts: list[dict]) -> None:
             if not fid.startswith(run_id + "-"):
                 fid = f"{run_id}-{fid}"
             c.execute(
-                "INSERT OR REPLACE INTO facts "
-                "(id,run_id,entity_key,doc_id,type,type_label,statement,evidence_quote,amount,event_date,"
-                "confidence,dedupe_key,corroboration,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                dbmod.upsert_sql("facts", _FACT_COLS, ("id",), c.dialect),
                 (fid, run_id, entity_key, f.get("doc_id", ""), f.get("type", ""),
                  f.get("type_label", ""), f.get("statement", ""), f.get("evidence_quote", ""),
                  f.get("amount", ""), f.get("event_date", ""), f.get("confidence", 0),
@@ -467,10 +545,13 @@ def list_audit(entity_key: str | None = None, limit: int = 100):
 # ---------------- run events ----------------
 
 
+_EVENT_COLS = ("run_id", "seq", "type", "payload", "created_at")
+
+
 def append_event(run_id: str, seq: int, event: dict) -> None:
     """执行事件落库。seq 由服务端分配，保证同一运行内可增量拉取。"""
     with tx() as c:
-        c.execute("INSERT OR REPLACE INTO run_events (run_id,seq,type,payload,created_at) VALUES (?,?,?,?,?)",
+        c.execute(dbmod.upsert_sql("run_events", _EVENT_COLS, ("run_id", "seq"), c.dialect),
                   (run_id, int(seq), event.get("type", ""),
                    json.dumps(event, ensure_ascii=False), now()))
 
@@ -499,9 +580,12 @@ def max_event_seq(run_id: str) -> int:
 # ---------------- checkpoints ----------------
 
 
+_CKPT_COLS = ("run_id", "step", "payload", "created_at")
+
+
 def save_checkpoint(run_id: str, step: int, payload: dict) -> None:
     with tx() as c:
-        c.execute("INSERT OR REPLACE INTO checkpoints (run_id,step,payload,created_at) VALUES (?,?,?,?)",
+        c.execute(dbmod.upsert_sql("checkpoints", _CKPT_COLS, ("run_id", "step"), c.dialect),
                   (run_id, int(step), json.dumps(payload, ensure_ascii=False), now()))
 
 

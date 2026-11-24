@@ -530,7 +530,7 @@ async function loadFromServer(manual: boolean): Promise<void> {
     scanInfo.value = { skipped: d.skipped }
     if (!list.length) {
       if (!docs.value.length) bundleMeta.value = { dir: d.dir }
-      if (manual) toast(`materials/ 为空（${d.dir || ''}），请拖入文件或放入后刷新`)
+      if (manual) toast('materials/ 为空，请拖入文件或放入后刷新')
       return
     }
     const clean = list.map(normDoc).filter(Boolean) as PolicyDoc[]

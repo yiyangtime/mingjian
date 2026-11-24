@@ -48,7 +48,7 @@ python -m mingjian serve                      # 打开 http://127.0.0.1:8765
 
 ```bash
 python -m mingjian run 某某科技          # 跑一次，报告落 output/
-python -m mingjian run 000000 --days 60  # 用证券代码，拉长窗口
+python -m mingjian run 某某科技 --days 60  # 自定义回溯窗口
 ```
 
 ### 方式二：Docker
@@ -85,13 +85,13 @@ mingjian serve
 
 | 步骤 | 实际动作 |
 |---|---|
-| 1 实体解析 | 公司名 → 证券代码、orgId、全称、行业、主营、注册地 |
+| 1 实体解析 | 公司名 → 实体档案（orgId、全称、行业、主营、注册地） |
 | 2 多源采集 | 近 30 天公告 + 按事件词检索资讯，按主体相关度过滤 |
 | 3 正文解析 | 公告 PDF 还原中文、资讯正文抽取，记录证据等级 |
 | 4 事实抽取 | 事件分类、金额日期抽取、证据句定位、置信度、跨源合并 |
 | 5 变化比对 | 与同一公司上一份快照比较：新增 / 升温 / 本轮未见 |
 | 6 报告成稿 | 八节结构，判断逐条挂事实编号 |
-| 7 留痕入库 | 事实、来源、快照、审计全部落 SQLite |
+| 7 留痕入库 | 事实、来源、快照、审计全部落库（默认 SQLite，可切 PostgreSQL / MySQL） |
 
 运行治理：事件逐条落库可回放、取消在步骤边界生效、第 1–4 步检查点续跑、
 每天/每周定时任务、确认与修正只追加不覆盖。
@@ -114,7 +114,7 @@ api → runtime → services → infra → core
 ```
 
 - `core`：日志、HTTP、文本、PDF、上下文预算
-- `infra`：SQLite、巨潮 / 东财、模型服务、调度
+- `infra`：数据库（SQLite / PostgreSQL / MySQL）、巨潮 / 东财、模型服务、调度
 - `services`：抽取、分类、归因、成稿、政策解析（不感知 HTTP）
 - `runtime`：七步管道、竞品对比、作业队列与断点
 - `api`：九个领域路由、统一错误形状、SPA 托管
@@ -132,18 +132,24 @@ api → runtime → services → infra → core
 | `MINGJIAN_MAX_COMPANIES` | 6 | 竞品对比家数上限 |
 | `MINGJIAN_MAX_NEWS` / `MINGJIAN_MAX_ANN` | 45 / 40 | 资讯 / 公告条数上限 |
 | `MINGJIAN_MAX_FETCH` | 12 | 正文抓取条数上限 |
-| `MINGJIAN_LLM_BASE` / `_KEY` / `_MODEL` | 空 | 可选模型；不配则走规则引擎 |
+| `MINGJIAN_LLM_BASE` / `_KEY` / `_MODEL` | 空 | 可选模型；仅当库里没有模型配置时作为兜底 |
+| `MINGJIAN_DB_URL` | 空（本地 SQLite） | 可选数据库连接串，见 [docs/database.md](docs/database.md) |
 
 大模型只用于润色「判断段」，事实与引用始终由程序生成并校验；模型返回的编号不在
 事实清单内会被整条丢弃。页面「模型配置」内置 11 家 OpenAI 兼容服务商预设。
+
+页面里保存的配置与生效项存在同一个数据库的 `settings` 表（键 `llm`），重启自动
+恢复，「停用」也会落库；旧 `config.json` 的 `llm_*` 只在库里还没有配置时迁移一次，
+之后以库为准。数据库切换见 [docs/database.md](docs/database.md)。
 
 ## 开发与测试
 
 ```bash
 pip install -e ".[dev]"
 ruff check .
-python tools/selftest_all.py        # 33 项断言：抽取 / 归因 / 矩阵 / 政策 / 调度 / 落库
+python tools/selftest_all.py        # 37 项断言：抽取 / 归因 / 矩阵 / 政策 / 调度 / 落库 / 方言 / 模型配置
 python tools/selftest_arch.py       # 分层边界、路由唯一性、前端隔离、视图体积棘轮
+python -m mingjian db --counts      # 当前数据库、版本与各表行数
 cd web && npm ci && npm run build   # vue-tsc 类型检查 + 构建
 ```
 
@@ -186,7 +192,8 @@ Node 20 上跑同样的门禁，并做一次服务冒烟。
 mingjian/            后端包（core / infra / services / runtime / api / cli / server）
 web/                 前端（Vue 3 + TypeScript + Vite，dist 随仓库分发）
 tools/               自测与架构门禁
-docs/                architecture / methodology / data-sources / policy-import
+docs/                architecture / methodology / data-sources / policy-import / database
+sql/                 SQLite / PostgreSQL / MySQL 初始化脚本（由表结构定义生成）
 materials/           政策材料投放目录（真实材料不入库）
 data/ output/ logs/  运行时数据，已在 .gitignore 中排除
 ```

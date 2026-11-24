@@ -1,9 +1,12 @@
 """
-模型接入配置：页面里改，运行中生效。
+模型接入配置：页面里改，运行中生效，配置落库。
 
 只支持 OpenAI 兼容的 /chat/completions 端点——国内外主流厂商都提供这一形态，
-自定义网关也能直接填。写回 config.json 的 llm_* 字段，同时更新内存里的 CFG，
-不必重启服务。
+自定义网关也能直接填。配置存在 settings 表（键 llm），重启后自动读回；
+旧版 config.json 的 llm_* 字段只在库里还没有配置时迁移一次。
+
+优先级：库里的生效配置 > 环境变量 > config.json > 规则引擎。
+页面里「停用」也会落库，重启后不会因为环境变量或 config.json 又生效。
 
 密钥永不回传前端：GET 只给「是否已设置 + 后四位」。
 """
@@ -14,7 +17,9 @@ import time
 import uuid
 
 from ..config import CFG, CONFIG_PATH
-from . import llm
+from . import llm, store
+
+SETTING_KEY = "llm"
 
 # 预设只负责填好 base 与候选模型，所有字段仍可手改
 PROVIDERS = [
@@ -57,6 +62,7 @@ PROVIDERS = [
 
 
 def _read_file() -> dict:
+    """config.json 原文。只作为旧配置的一次性迁移来源。"""
     if not CONFIG_PATH.exists():
         return {}
     try:
@@ -66,26 +72,71 @@ def _read_file() -> dict:
         return {}
 
 
-def _write_raw(raw: dict) -> None:
-    CONFIG_PATH.write_text(
-        json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+def _timeout_of(value, fallback: float) -> float:
+    try:
+        return max(5.0, min(300.0, float(value)))
+    except (TypeError, ValueError):
+        return fallback
 
 
-def _seed_profiles(raw: dict) -> list[dict]:
-    """把旧版单套配置沉成第一条记录，之后新增/切换都不会丢已存密钥。"""
+def _clean(data: dict) -> dict:
+    """归一库里的 JSON：丢掉非字典项；活动项必须真实存在。"""
+    items = data.get("profiles")
+    items = [p for p in items if isinstance(p, dict)] if isinstance(items, list) else []
+    active = str(data.get("active") or "")
+    if active and not any(str(p.get("id") or "") == active for p in items):
+        active = ""
+    return {"profiles": items, "active": active}
+
+
+def _from_file() -> dict:
+    """旧版 config.json 里的模型配置（多套或单套），没有则返回空结构。"""
+    raw = _read_file()
     items = raw.get("llm_profiles")
-    if isinstance(items, list) and items:
-        return items
-    if not (CFG.llm_base and CFG.llm_key and CFG.llm_model):
-        return []
-    pid = "M" + time.strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:4]
-    items = [{"id": pid, "name": CFG.llm_model, "base": CFG.llm_base,
-              "key": CFG.llm_key, "model": CFG.llm_model,
-              "timeout": CFG.llm_timeout}]
-    raw["llm_profiles"] = items
-    raw["llm_active"] = pid
-    _write_raw(raw)
-    return items
+    items = [p for p in items if isinstance(p, dict)] if isinstance(items, list) else []
+    if not items:
+        base = str(raw.get("llm_base") or "")
+        key = str(raw.get("llm_key") or "")
+        model = str(raw.get("llm_model") or "")
+        if not (base and key and model):
+            return {"profiles": [], "active": ""}
+        pid = "M" + time.strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:4]
+        items = [{"id": pid, "name": model, "base": base, "key": key,
+                  "model": model, "timeout": _timeout_of(raw.get("llm_timeout"), CFG.llm_timeout)}]
+    active = str(raw.get("llm_active") or "")
+    if active and not any(str(p.get("id") or "") == active for p in items):
+        active = ""
+    return {"profiles": items, "active": active or str(items[0].get("id") or "")}
+
+
+def _save(state: dict) -> None:
+    store.put_setting(SETTING_KEY, {"profiles": state["profiles"], "active": state["active"]})
+
+
+def _load_raw() -> tuple[dict, bool]:
+    """(配置, 库里是否已有记录)；旧配置在首次读取时迁入，之后以库为准。"""
+    store.init()                       # 临时库、首次调用也能直接用
+    stored = store.get_setting(SETTING_KEY)
+    if isinstance(stored, dict) and "profiles" in stored:
+        return _clean(stored), True
+    legacy = _from_file()
+    if legacy["profiles"]:
+        _save(legacy)
+        return legacy, True
+    return legacy, False
+
+
+def _load() -> dict:
+    return _load_raw()[0]
+
+
+def _active(state: dict) -> dict | None:
+    """当前生效的配置；缺 base / key / model 任一项视为未配置。"""
+    pid = str(state.get("active") or "")
+    for p in state["profiles"]:
+        if pid and str(p.get("id") or "") == pid:
+            return p if (p.get("base") and p.get("key") and p.get("model")) else None
+    return None
 
 
 def _profile_out(p: dict, active_id: str) -> dict:
@@ -95,22 +146,47 @@ def _profile_out(p: dict, active_id: str) -> dict:
         "name": str(p.get("name") or p.get("model") or "未命名配置")[:60],
         "base": str(p.get("base") or ""),
         "model": str(p.get("model") or ""),
-        "timeout": float(p.get("timeout") or CFG.llm_timeout),
+        "timeout": _timeout_of(p.get("timeout"), CFG.llm_timeout),
         "key_set": bool(key),
         "key_hint": ("…" + key[-4:]) if key else "",
         "active": bool(active_id and str(p.get("id") or "") == active_id),
     }
 
 
+def _apply(p: dict) -> None:
+    CFG.llm_base = str(p.get("base") or "")
+    CFG.llm_key = str(p.get("key") or "")
+    CFG.llm_model = str(p.get("model") or "")
+    CFG.llm_timeout = _timeout_of(p.get("timeout"), CFG.llm_timeout)
+
+
+def _clear_runtime() -> None:
+    CFG.llm_base = CFG.llm_key = CFG.llm_model = ""
+
+
+def bootstrap() -> None:
+    """启动时把库里的生效配置读回内存；库里有记录就以库为准。
+
+    库里有记录但当前是「停用」时显式清空内存配置——否则环境变量或
+    config.json 里的旧值会在重启后把已停用的模型顶回来。
+    """
+    state, recorded = _load_raw()
+    if not recorded:
+        return                          # 库里没有配置：沿用环境变量 / config.json
+    prof = _active(state)
+    if prof:
+        _apply(prof)
+    else:
+        _clear_runtime()
+
+
 def public() -> dict:
     """前端可见的配置：密钥只暴露尾号，列表里也不回传明文。"""
-    raw = _read_file()
-    items = raw.get("llm_profiles")
-    items = items if isinstance(items, list) else []
-    active_id = str(raw.get("llm_active") or "") if CFG.llm_enabled else ""
-    profiles = [_profile_out(p, active_id) for p in items if isinstance(p, dict)]
+    state = _load()
+    active_id = state["active"] if CFG.llm_enabled else ""
+    profiles = [_profile_out(p, active_id) for p in state["profiles"]]
     if not profiles and CFG.llm_enabled:
-        # 旧版只有一套配置：合成一条只读记录，第一次保存/切换时再落盘
+        # 只有环境变量或旧 config.json 提供、尚未在页面保存过：合成一条只读记录
         profiles = [{
             "id": "current", "name": CFG.llm_model, "base": CFG.llm_base,
             "model": CFG.llm_model, "timeout": CFG.llm_timeout,
@@ -130,16 +206,6 @@ def public() -> dict:
     }
 
 
-def _apply(p: dict) -> None:
-    CFG.llm_base = str(p.get("base") or "")
-    CFG.llm_key = str(p.get("key") or "")
-    CFG.llm_model = str(p.get("model") or "")
-    try:
-        CFG.llm_timeout = float(p.get("timeout") or CFG.llm_timeout)
-    except (TypeError, ValueError):
-        pass
-
-
 def save_profile(data: dict) -> dict:
     """新增或编辑一套配置，并立即切为当前使用。"""
     base = str(data.get("base") or "").strip().rstrip("/")
@@ -148,16 +214,12 @@ def save_profile(data: dict) -> dict:
         raise ValueError("Base URL 与模型名都不能为空")
     if not base.startswith(("http://", "https://")):
         raise ValueError("Base URL 需以 http:// 或 https:// 开头")
-    try:
-        timeout = float(data.get("timeout") or CFG.llm_timeout)
-    except (TypeError, ValueError):
-        timeout = CFG.llm_timeout
-    timeout = max(5.0, min(300.0, timeout))
+    timeout = _timeout_of(data.get("timeout"), CFG.llm_timeout)
 
-    raw = _read_file()
-    items = _seed_profiles(raw)
+    state = _load()
+    items = state["profiles"]
     pid = str(data.get("id") or "").strip()
-    # 旧版页面拿到的是合成记录 current：落到刚沉淀出的第一条上，避免重复建档
+    # 页面拿到的是合成记录 current：落到第一条已存配置上，避免重复建档
     if pid == "current" and items:
         pid = str(items[0].get("id") or "")
     existing = next((p for p in items if str(p.get("id") or "") == pid), None) if pid else None
@@ -178,103 +240,56 @@ def save_profile(data: dict) -> dict:
                 "name": str(data.get("name") or model)[:60],
                 "base": base, "key": key, "model": model, "timeout": timeout}
         items.append(prof)
-    raw["llm_profiles"] = items
-    raw["llm_active"] = prof["id"]
-    raw.update({"llm_base": base, "llm_key": key, "llm_model": model,
-                "llm_timeout": timeout})
-    _write_raw(raw)
+    _save({"profiles": items, "active": prof["id"]})
     _apply(prof)
     return public()
 
 
 def activate(pid: str) -> dict:
-    raw = _read_file()
-    items = _seed_profiles(raw)
+    state = _load()
     pid = (pid or "").strip()
-    if pid == "current" and CFG.llm_enabled and not items:
+    if pid == "current" and CFG.llm_enabled and not state["profiles"]:
         return public()
-    prof = next((p for p in items if str(p.get("id") or "") == pid), None)
+    if pid == "current" and state["profiles"]:
+        pid = str(state["profiles"][0].get("id") or "")
+    prof = next((p for p in state["profiles"] if str(p.get("id") or "") == pid), None)
     if not prof:
         raise ValueError("配置不存在，请刷新后重试")
-    raw["llm_active"] = pid
-    raw.update({"llm_base": prof.get("base") or "", "llm_key": prof.get("key") or "",
-                "llm_model": prof.get("model") or "",
-                "llm_timeout": float(prof.get("timeout") or CFG.llm_timeout)})
-    _write_raw(raw)
+    if not (prof.get("base") and prof.get("key") and prof.get("model")):
+        raise ValueError("该配置缺少 Base URL / API Key / 模型名，请先补全")
+    _save({"profiles": state["profiles"], "active": pid})
     _apply(prof)
     return public()
 
 
 def delete_profile(pid: str) -> dict:
-    raw = _read_file()
-    items = _seed_profiles(raw)
+    state = _load()
     pid = (pid or "").strip()
-    if pid == "current" and not items:
+    if pid == "current" and not state["profiles"]:
         return clear()
-    target = next((p for p in items if str(p.get("id") or "") == pid), None)
+    target = next((p for p in state["profiles"] if str(p.get("id") or "") == pid), None)
     if not target:
         raise ValueError("配置不存在，请刷新后重试")
-    items = [p for p in items if str(p.get("id") or "") != pid]
-    raw["llm_profiles"] = items
-    if str(raw.get("llm_active") or "") == pid:
-        if items:
-            nxt = items[0]
-            raw["llm_active"] = nxt["id"]
-            raw.update({"llm_base": nxt.get("base") or "", "llm_key": nxt.get("key") or "",
-                        "llm_model": nxt.get("model") or "",
-                        "llm_timeout": float(nxt.get("timeout") or CFG.llm_timeout)})
-            _apply(nxt)
-        else:
-            raw["llm_active"] = ""
-            raw.update({"llm_base": "", "llm_key": "", "llm_model": ""})
-            CFG.llm_base = CFG.llm_key = CFG.llm_model = ""
-    _write_raw(raw)
-    return public()
-
-
-def _write_file(values: dict) -> None:
-    """合并写 config.json，保留甲方自己加的其它键。"""
-    raw: dict = {}
-    if CONFIG_PATH.exists():
-        try:
-            raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            raw = {}
-    raw.update(values)
-    CONFIG_PATH.write_text(
-        json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-
-
-def save(base: str, key: str | None, model: str, timeout: float | None) -> dict:
-    base = (base or "").strip().rstrip("/")
-    model = (model or "").strip()
-    if not base or not model:
-        raise ValueError("Base URL 与模型名都不能为空；要停用请点「清除配置」")
-    if not base.startswith(("http://", "https://")):
-        raise ValueError("Base URL 需以 http:// 或 https:// 开头")
-    key = (key or "").strip()
-    if not key:
-        key = CFG.llm_key          # 留空表示沿用已保存的密钥
-    if not key:
-        raise ValueError("API Key 不能为空")
-    try:
-        timeout = float(timeout or CFG.llm_timeout)
-    except (TypeError, ValueError):
-        timeout = CFG.llm_timeout
-    timeout = max(5.0, min(300.0, timeout))
-
-    _write_file({"llm_base": base, "llm_key": key, "llm_model": model,
-                 "llm_timeout": timeout})
-    CFG.llm_base, CFG.llm_key, CFG.llm_model, CFG.llm_timeout = (
-        base, key, model, timeout)
+    items = [p for p in state["profiles"] if str(p.get("id") or "") != pid]
+    active = state["active"]
+    nxt = None
+    if active == pid:
+        # 删除当前配置后优先切到另一套完整配置；都不完整则回到规则引擎
+        nxt = next((p for p in items if p.get("base") and p.get("key") and p.get("model")), None)
+        active = str(nxt.get("id") or "") if nxt else ""
+    _save({"profiles": items, "active": active})
+    if not items or (active != state["active"] and not nxt):
+        _clear_runtime()
+    elif nxt:
+        _apply(nxt)
     return public()
 
 
 def clear() -> dict:
-    raw = _read_file()
-    raw.update({"llm_base": "", "llm_key": "", "llm_model": "", "llm_active": ""})
-    _write_raw(raw)
-    CFG.llm_base = CFG.llm_key = CFG.llm_model = ""
+    """停用当前配置：列表保留，随时可重新启用。"""
+    state = _load()
+    _save({"profiles": state["profiles"], "active": ""})
+    _clear_runtime()
     return public()
 
 
@@ -285,10 +300,8 @@ def probe(base: str = "", key: str = "", model: str = "",
     key = (key or "").strip()
     model = (model or CFG.llm_model).strip()
     if not key and profile_id:
-        raw = _read_file()
-        items = raw.get("llm_profiles")
-        for p in items if isinstance(items, list) else []:
-            if isinstance(p, dict) and str(p.get("id") or "") == profile_id:
+        for p in _load()["profiles"]:
+            if str(p.get("id") or "") == profile_id:
                 key = str(p.get("key") or "")
                 break
     if not key:

@@ -684,8 +684,8 @@ onMounted(() => {
       <div class="searchbar">
         <input
           v-model="company" type="text" class="company-input"
-          placeholder="输入公司简称、全称或证券代码" autocomplete="off"
-          aria-label="公司名称或证券代码"
+          placeholder="输入公司简称或全称" autocomplete="off"
+          aria-label="公司名称"
           @keydown.enter="start"
         >
         <button class="btn btn-primary btn-lg" :disabled="running" @click="start">

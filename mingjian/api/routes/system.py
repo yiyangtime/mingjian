@@ -8,11 +8,21 @@ from pathlib import Path
 from fastapi import APIRouter, Body, HTTPException
 
 from ... import __version__
-from ...config import CFG, DB_PATH, OUT_DIR, ROOT
+from ...config import CFG, OUT_DIR, ROOT
 from ...infra import scheduler, store
 from ..deps import START
 
 router = APIRouter(tags=["系统与审计"])
+
+
+def _display_path(value: str, fallback: str) -> str:
+    """只回传相对路径；外部库与项目外文件退回方言名，避免泄露主机目录。"""
+    if not value:
+        return fallback
+    try:
+        return Path(value).resolve().relative_to(ROOT).as_posix()
+    except (OSError, TypeError, ValueError):
+        return fallback
 
 
 @router.get("/api/health")
@@ -24,12 +34,6 @@ def health():
 
 @router.get("/api/system")
 def system_info():
-    def size(p: Path) -> int:
-        try:
-            return p.stat().st_size
-        except OSError:
-            return 0
-
     reports = len(list(OUT_DIR.glob("*.md")))
     exports = len(list(OUT_DIR.glob("*.csv")))
     return {
@@ -37,9 +41,11 @@ def system_info():
         "python": platform.python_version(), "platform": platform.platform(),
         "uptime_sec": int(time.time() - START),
         "now": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "paths": {"root": str(ROOT), "db": str(DB_PATH),
-                  "output": str(OUT_DIR), "logs": str(ROOT / "logs")},
-        "db_bytes": size(DB_PATH),
+        "paths": {"root": ".", "db": _display_path(store.target(), store.dialect()),
+                  "output": _display_path(str(OUT_DIR), "output"),
+                  "logs": _display_path(str(ROOT / "logs"), "logs")},
+        "db_backend": store.dialect(),
+        "db_bytes": store.db_size(),
         "output": {"reports": reports, "tables": exports, "files": reports + exports},
         "counts": store.table_counts(),
         "llm": {"active": CFG.llm_enabled, "model": CFG.llm_model or "rule-engine",

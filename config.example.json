@@ -13,5 +13,6 @@
   "llm_base": "",
   "llm_key": "",
   "llm_model": "",
-  "llm_timeout": 90.0
+  "llm_timeout": 90.0,
+  "db_url": ""
 }
