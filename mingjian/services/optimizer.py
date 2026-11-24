@@ -17,7 +17,10 @@ from __future__ import annotations
 import hashlib
 import json
 import pathlib
+import re
+import time
 
+from ..config import CFG, OUT_DIR
 from ..infra import optstore
 from . import extract
 
@@ -31,6 +34,7 @@ MAX_RECALL_DROP = 0.15
 MIN_MACRO_DELTA = -0.01
 MAX_HOLDOUT_DROP = 0.02
 MAX_OTHER_RATE_DELTA = 0.05
+MAX_LABEL_SHIFT = 0.10
 
 _ALLOWED_FIELDS = {"kind", "version", "base_version", "description", "add_keywords"}
 
@@ -244,6 +248,21 @@ def _run(cases: list[dict], rules: list[dict]) -> tuple[dict, list[dict]]:
     return _summary(rows), rows
 
 
+def _label_shift(base: dict, cand: dict, total: int) -> list[dict]:
+    """预测分布偏移超过阈值的类型；允许条数随样本量放宽，最少 2 条。
+
+    防的不是修正本身，而是把一批样本从一类成批推到另一类：类型召回下滑已
+    有单独检查，这项盯的是预测结果的结构突变。
+    """
+    allowed = max(2, int(round(total * MAX_LABEL_SHIFT)))
+    out = []
+    for label, b in base["per_label"].items():
+        shift = cand["per_label"][label]["predicted"] - b["predicted"]
+        if abs(shift) > allowed:
+            out.append({"label": label, "shift": shift})
+    return out
+
+
 def _gate(base: dict, cand: dict, base_rows: list[dict], cand_rows: list[dict],
           cases: list[dict]) -> dict:
     total = len(cases)
@@ -261,6 +280,7 @@ def _gate(base: dict, cand: dict, base_rows: list[dict], cand_rows: list[dict],
             c = cand["per_label"][label]
             if b["recall"] - c["recall"] > MAX_RECALL_DROP:
                 drop_labels.append(label)
+    shift = _label_shift(base, cand, total)
 
     checks = [
         {"name": "样本量", "ok": total >= MIN_CASES and holdout_n >= MIN_HOLDOUT,
@@ -275,6 +295,9 @@ def _gate(base: dict, cand: dict, base_rows: list[dict], cand_rows: list[dict],
          "detail": f"{base_h['accuracy']:.1%} → {cand_h['accuracy']:.1%}"},
         {"name": "分类型召回", "ok": not drop_labels,
          "detail": "无类型下降超过 15%" if not drop_labels else f"下降超过阈值：{', '.join(drop_labels)}"},
+        {"name": "类型分布", "ok": not shift,
+         "detail": "无类型偏移超过允许条数" if not shift else
+                   "偏移：" + "，".join(f"{row['label']} {row['shift']:+d}" for row in shift)},
         {"name": "other 比例", "ok": cand["other_rate"] <= base["other_rate"] + MAX_OTHER_RATE_DELTA,
          "detail": f"{base['other_rate']:.1%} → {cand['other_rate']:.1%}"},
     ]
@@ -284,6 +307,7 @@ def _gate(base: dict, cand: dict, base_rows: list[dict], cand_rows: list[dict],
                            "max_recall_drop": MAX_RECALL_DROP,
                            "min_macro_delta": MIN_MACRO_DELTA,
                            "max_holdout_drop": MAX_HOLDOUT_DROP,
+                           "max_label_shift": MAX_LABEL_SHIFT,
                            "max_other_rate_delta": MAX_OTHER_RATE_DELTA}}
 
 
@@ -301,6 +325,661 @@ def _errors(base_rows: list[dict], cand_rows: list[dict]) -> dict:
 
     return {"baseline": clean(base_err), "candidate": clean(cand_err),
             "new": clean(new), "fixed": clean(fixed)}
+
+
+# ---------------------------------------------------------------- 草案生成
+
+# 草案只从评测集判错样本里抽词，产物是候选 JSON，不直接上线：仍需人工复核，
+# 再走 evaluate / promote 的同一套门禁。抽词是规则行为，不让模型参与。
+_STOP_WORDS = {
+    "某某", "企业", "公司", "集团", "股份", "有限", "控股", "实业", "科技",
+    "签订", "签署", "获得", "关于", "公告", "通知", "本次", "上述", "已经",
+    "拟于", "甲乙", "丙方", "以及", "实现", "完成", "进行", "同比", "环比",
+    "相关", "有关", "目前", "近日", "记者", "一个", "两个", "多个",
+}
+_STOP_CHARS = set("某的了与及并在为是将已就都还又其该本把被从对和等之于得地着过很更最各每")
+
+
+def _bad_word(text: str) -> bool:
+    if not text or any(ch in _STOP_CHARS for ch in text):
+        return True
+    return any(text[i:i + 2] in _STOP_WORDS for i in range(len(text) - 1))
+
+
+def _phrases(text: str) -> list[str]:
+    """按双字切分再拼接相邻双字，产出 2—4 字片段，长词优先。
+
+    中文短标题里双字对齐通常正好落在词边界上；逐字滑窗会产出「业签订联」
+    这类跨词碎片，看起来像命中，实际毫无泛化价值。
+    """
+    out: list[str] = []
+    for chunk in re.findall(r"[\u4e00-\u9fa5]+", text or ""):
+        for offset in (0, 1):
+            grams = [chunk[i:i + 2] for i in range(offset, len(chunk) - 1, 2)]
+            for i, gram in enumerate(grams):
+                if len(gram) != 2 or _bad_word(gram):
+                    continue
+                if i + 1 < len(grams) and not _bad_word(grams[i + 1]):
+                    joined = gram + grams[i + 1]
+                    if not _bad_word(joined):
+                        out.append(joined)
+                out.append(gram)
+    return list(dict.fromkeys(out))
+
+
+def _acceptable(word: str, known: set[str]) -> bool:
+    """拒绝已有词、已有词的真子串和长度越界的片段。"""
+    if not 2 <= len(word) <= 4:
+        return False
+    for kw in known:
+        if word == kw:
+            return False
+        if len(word) < len(kw) and word in kw:
+            return False
+    return True
+
+
+def _screen(word: str, target: str, cases: list[dict], rules: list[dict],
+            base_rows: list[dict], source: int) -> bool:
+    """加入一个词后只重跑受影响的样本：必须修好来源样本，且不弄坏基线判对的样本。"""
+    trial = [{"type": r["type"], "label": r["label"], "keywords": list(r["keywords"])}
+             for r in rules]
+    for rule in trial:
+        if rule["type"] == target:
+            rule["keywords"].append(word)
+            break
+    for i, case in enumerate(cases):
+        if word not in case["title"] and word not in case["body"][:1200]:
+            continue
+        predicted, _ = extract.classify(case["title"], case["body"], trial)
+        if i == source:
+            if predicted != case["expected"]:
+                return False
+        elif base_rows[i]["predicted"] == case["expected"] and predicted != case["expected"]:
+            return False
+    return True
+
+
+def suggest(cases: list[dict], base_rules: list[dict],
+            max_per_type: int = 6) -> tuple[dict[str, list[str]], list[dict]]:
+    """按判错样本的事件类型抽词，每条错误最多贡献一个词。"""
+    rules = extract.normalize_rules(base_rules)
+    if not rules:
+        raise ValueError("基线规则无效，无法生成草案")
+    _, base_rows = _run(cases, rules)
+    known = {kw for rule in rules for kw in rule["keywords"]}
+    limit = max(1, min(int(max_per_type), MAX_KEYWORDS_PER_TYPE))
+    picked: dict[str, list[str]] = {}
+    reviewed: list[dict] = []
+    for i, case in enumerate(cases):
+        row = base_rows[i]
+        if row["predicted"] == case["expected"]:
+            continue
+        target = case["expected"]
+        bucket = picked.setdefault(target, [])
+        if len(bucket) >= limit:
+            continue
+        word = ""
+        for text in (case["title"], case["body"][:300]):
+            for item in _phrases(text):
+                if item in bucket or not _acceptable(item, known):
+                    continue
+                if _screen(item, target, cases, rules, base_rows, i):
+                    word = item
+                    break
+            if word:
+                break
+        if not word:
+            continue
+        bucket.append(word)
+        known.add(word)
+        for rule in rules:                      # 后续词按累积效果筛选
+            if rule["type"] == target:
+                rule["keywords"].append(word)
+                break
+        reviewed.append({"id": case["id"], "expected": target,
+                         "predicted": row["predicted"], "word": word})
+    return {k: v for k, v in picked.items() if v}, reviewed
+
+
+def draft(cases_path, out_dir, base_rules=None, base_version=None,
+          version: str = "", description: str = "", max_per_type: int = 6) -> dict:
+    """从评测集判错样本生成候选草案，只落盘，不改生效规则。"""
+    cases = load_cases(cases_path)
+    rules = _base_rules(base_rules)
+    base_version = _base_version(base_version)
+    picked, reviewed = suggest(cases, rules, max_per_type=max_per_type)
+    if not picked:
+        raise ValueError("评测集里没有可抽取的判错样本，或候选词都过不了筛选")
+    ver = optstore.safe_version(version or "draft-" + time.strftime("%Y%m%d-%H%M%S"))
+    candidate = validate_candidate({
+        "kind": KIND,
+        "version": ver,
+        "base_version": base_version,
+        "description": description or "由离线评测判错样本自动抽取的候选草案",
+        "add_keywords": picked,
+    })
+    path = pathlib.Path(out_dir) / f"{ver}.json"
+    if path.exists() and version:
+        raise ValueError(f"草案文件已存在：{path.name}")
+    optstore.write_json(path, candidate)
+    return {"candidate": candidate, "path": str(path), "base_version": base_version,
+            "cases": len(cases), "errors": len(reviewed),
+            "suggested": picked, "reviewed": reviewed}
+
+
+def _norm_title(text: str) -> str:
+    return re.sub(r"\s+", "", text or "")
+
+
+def _known_samples(path) -> tuple[set[str], set[str]]:
+    """宽松读取已有样本的标题与编号。
+
+    不能用 load_cases：待标注文件的 expected 是空的，而这里只需要去重用的
+    标题和编号。
+    """
+    p = pathlib.Path(path)
+    if not p.exists():
+        return set(), set()
+    try:
+        text = p.read_text(encoding="utf-8")
+    except OSError:
+        return set(), set()
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        payload = None
+    items: list = []
+    if isinstance(payload, list):
+        items = payload
+    elif isinstance(payload, dict) and isinstance(payload.get("cases"), list):
+        items = payload["cases"]
+    else:
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            try:
+                items.append(json.loads(line))
+            except ValueError:
+                continue
+    titles: set[str] = set()
+    ids: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        title = _norm_title(str(item.get("title") or ""))
+        if title:
+            titles.add(title)
+        cid = str(item.get("id") or "").strip()
+        if cid:
+            ids.add(cid)
+    return titles, ids
+
+
+def harvest(out_dir, limit: int = 200, entity_key: str = "", prefix: str = "H",
+            split: str = "dev", cases_path=None) -> dict:
+    """把运行期事实导出成待标注评测样本，expected 一律留空。
+
+    标准答案只能由人读原文后填写。`hint.predicted` 是运行期判定，只用于对照
+    与发现分歧，不能直接当 expected——否则评测集就变成了模型的回声。
+    """
+    from ..infra import store            # 只有 harvest 需要数据库，其余 optimize 命令离线
+
+    split = _split(split)
+    try:
+        store.init()
+        rows = store.facts_with_doc(limit=limit, entity_key=entity_key)
+    except Exception as e:
+        raise ValueError(f"读取运行事实失败：{type(e).__name__}") from e
+    seen_titles, seen_ids = _known_samples(cases_path) if cases_path else (set(), set())
+    skipped = {"duplicate": 0, "no_title": 0, "routine": 0}
+    items: list[dict] = []
+    seq = 0
+    for row in rows:
+        title = str(row.get("doc_title") or "").strip()
+        if not title:
+            skipped["no_title"] += 1
+            continue
+        key = _norm_title(title)
+        if key in seen_titles:
+            skipped["duplicate"] += 1
+            continue
+        if extract.ROUTINE.search(title):
+            skipped["routine"] += 1
+            continue
+        seen_titles.add(key)
+        seq += 1
+        cid = f"{prefix}{seq:04d}"
+        while cid in seen_ids:
+            seq += 1
+            cid = f"{prefix}{seq:04d}"
+        items.append({
+            "id": cid,
+            "title": title[:300],
+            "body": re.sub(r"\s+", " ", str(row.get("doc_body") or ""))[:300],
+            "expected": "",
+            "split": split,
+            "hint": {
+                "run_id": row.get("run_id") or "",
+                "doc_id": row.get("doc_id") or "",
+                "kind": row.get("doc_kind") or "",
+                "evidence_level": row.get("evidence_level") or "",
+                "predicted": row.get("type") or "",
+                "url": row.get("url") or "",
+            },
+        })
+    out = pathlib.Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / f"harvest-{time.strftime('%Y%m%d-%H%M%S')}.jsonl"
+    with path.open("w", encoding="utf-8") as fh:
+        for item in items:
+            fh.write(json.dumps(item, ensure_ascii=False) + "\n")
+    result = {"path": str(path), "count": len(items), "scanned": len(rows),
+              "skipped": skipped, "split": split}
+    optstore.append_audit({"action": "harvest", "actor": "cli",
+                           "version": path.name, "count": len(items),
+                           "scanned": len(rows)})
+    return result
+
+
+DOC_MIN_BODY = 80
+RECALL_LABELS = ("fact", "none")
+
+
+def _doc_names(store, run_id: str, entity_key: str) -> list[str]:
+    """采集时的候选主体名，离线重跑时用同一组名字做主体核验。"""
+    run = store.get_run(run_id) or {}
+    ent = store.get_entity(entity_key) or {}
+    out: list[str] = []
+    for value in (run.get("company"), ent.get("short_name"), ent.get("name")):
+        v = str(value or "").strip()
+        if v and v not in out:
+            out.append(v)
+    return out
+
+
+def harvest_docs(out_dir, limit: int = 200, entity_key: str = "", prefix: str = "D",
+                 split: str = "dev", cases_path=None,
+                 include_covered: bool = False) -> dict:
+    """把入库文档导出成召回评测的待标注样本，expected 一律留空。
+
+    默认只导没有产出事实的文档——这是抽取与检索的盲区；include_covered=True
+    时连已产出事实的文档一起导，用于检查误报。expected 只能填 fact 或 none：
+    这一层只问“该文档是否应产出事实”，不标事件类型。
+    """
+    from ..infra import store            # 只有采集需要数据库，其余 optimize 命令离线
+
+    split = _split(split)
+    try:
+        store.init()
+        rows = store.docs_with_fact_state(limit=limit, entity_key=entity_key,
+                                          only_blind=not include_covered)
+    except Exception as e:
+        raise ValueError(f"读取运行文档失败：{type(e).__name__}") from e
+
+    seen_titles, seen_ids = _known_samples(cases_path) if cases_path else (set(), set())
+    skipped = {"duplicate": 0, "no_title": 0, "routine": 0,
+               "no_body": 0, "no_entity": 0}
+    names_cache: dict[tuple[str, str], list[str]] = {}
+    items: list[dict] = []
+    seq = 0
+    for row in rows:
+        title = str(row.get("title") or "").strip()
+        if not title:
+            skipped["no_title"] += 1
+            continue
+        key = _norm_title(title)
+        if key in seen_titles:
+            skipped["duplicate"] += 1
+            continue
+        if extract.ROUTINE.search(title):
+            skipped["routine"] += 1
+            continue
+        body = re.sub(r"\s+", " ", str(row.get("body") or "")).strip()
+        if len(body) < DOC_MIN_BODY:
+            skipped["no_body"] += 1
+            continue
+        cache_key = (str(row.get("run_id") or ""), str(row.get("entity_key") or ""))
+        if cache_key not in names_cache:
+            names_cache[cache_key] = _doc_names(store, *cache_key)
+        names = names_cache[cache_key]
+        if not names:
+            skipped["no_entity"] += 1
+            continue
+        try:
+            extra = json.loads(row.get("extra") or "{}")
+        except ValueError:
+            extra = {}
+        query = str(extra.get("query") or "") if isinstance(extra, dict) else ""
+
+        seen_titles.add(key)
+        seq += 1
+        cid = f"{prefix}{seq:04d}"
+        while cid in seen_ids:
+            seq += 1
+            cid = f"{prefix}{seq:04d}"
+        fact_count = int(row.get("fact_count") or 0)
+        items.append({
+            "id": cid,
+            "title": title[:300],
+            "body": body[:1200],
+            "expected": "",
+            "split": split,
+            "hint": {
+                "run_id": row.get("run_id") or "",
+                "doc_id": row.get("doc_id") or "",
+                "kind": row.get("kind") or "",
+                "evidence_level": row.get("evidence_level") or "",
+                "url": row.get("url") or "",
+                "source": row.get("source") or "",
+                "query": query,
+                "fact_count": fact_count,
+                "predicted": "fact" if fact_count else "none",
+                "names": names,
+            },
+        })
+
+    out = pathlib.Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / f"harvest-docs-{time.strftime('%Y%m%d-%H%M%S')}.jsonl"
+    with path.open("w", encoding="utf-8") as fh:
+        for item in items:
+            fh.write(json.dumps(item, ensure_ascii=False) + "\n")
+    result = {"path": str(path), "count": len(items), "scanned": len(rows),
+              "skipped": skipped, "split": split,
+              "include_covered": include_covered}
+    optstore.append_audit({"action": "harvest_docs", "actor": "cli",
+                           "version": path.name, "count": len(items),
+                           "scanned": len(rows),
+                           "include_covered": include_covered})
+    return result
+
+
+def load_doc_cases(path) -> list[dict]:
+    """读取文档级召回评测集。
+
+    每条要有 title、expected（fact / none）与 hint.names；body 可选。
+    与分类评测集分开校验：expected 不是事件类型，而是“该文档是否应产出事实”。
+    """
+    p = pathlib.Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"召回评测集不存在：{p}")
+    try:
+        text = p.read_text(encoding="utf-8")
+    except OSError as e:
+        raise ValueError(f"读取召回评测集失败：{e}") from e
+    payload = None
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        pass
+    items: list = []
+    if isinstance(payload, list):
+        items = payload
+    elif isinstance(payload, dict) and isinstance(payload.get("cases"), list):
+        items = payload["cases"]
+    else:
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            try:
+                items.append(json.loads(line))
+            except ValueError as e:
+                raise ValueError(f"召回评测集行格式错误：{e}") from e
+
+    cases: list[dict] = []
+    for i, item in enumerate(items, 1):
+        if not isinstance(item, dict):
+            raise ValueError(f"召回样本第 {i} 条不是对象")
+        cid = str(item.get("id") or f"R{i:04d}")
+        title = str(item.get("title") or "").strip()
+        if not title:
+            raise ValueError(f"召回样本 {cid} 缺少 title")
+        expected = str(item.get("expected") or "").strip().lower()
+        if expected not in RECALL_LABELS:
+            raise ValueError(f"召回样本 {cid} 的 expected 只能是 fact 或 none")
+        hint = item.get("hint") or {}
+        names = [str(x).strip() for x in (hint.get("names") or []) if str(x).strip()]
+        if not names:
+            raise ValueError(f"召回样本 {cid} 缺少 hint.names，无法重跑主体核验")
+        cases.append({"id": cid, "title": title, "body": str(item.get("body") or ""),
+                      "expected": expected, "split": _split(item.get("split") or "dev"),
+                      "hint": {**hint, "names": names}})
+    if not cases:
+        raise ValueError("召回评测集没有样本")
+    return cases
+
+
+def recall(cases: list[dict], rules=None, base_version=None, min_conf=None,
+           actor: str = "offline") -> dict:
+    """文档级召回评测：只判“是否产出事实”，不判事件类型。
+
+    判定与运行期同口径：抽得出事实且置信度不低于 min_fact_conf 才算产出。
+    这不是门禁，只用于对照：检索词或抽取规则调整前后各跑一次，比较漏检与误报。
+    评测报告写入 data/optimizer/evaluations/，文件名以 recall- 开头。
+    """
+    rules = _base_rules(rules)
+    version = _base_version(base_version)
+    min_conf = CFG.min_fact_conf if min_conf is None else float(min_conf)
+    year = time.localtime().tm_year
+    rows: list[dict] = []
+    skipped: list[dict] = []
+    for case in cases:
+        hint = case.get("hint") or {}
+        names = {str(x).strip() for x in (hint.get("names") or []) if str(x).strip()}
+        if not names:
+            skipped.append({"id": case["id"], "reason": "no_names"})
+            continue
+        doc = {"title": case["title"], "body": case.get("body") or "",
+               "kind": hint.get("kind") or "",
+               "evidence_level": hint.get("evidence_level") or "",
+               "url": hint.get("url") or ""}
+        try:
+            fact = extract.build_fact(doc, names, year, rules=rules)
+        except Exception:
+            fact = None
+        kept = bool(fact and fact.confidence >= min_conf)
+        predicted = "fact" if kept else "none"
+        rows.append({"id": case["id"], "title": case["title"],
+                     "kind": hint.get("kind") or "",
+                     "split": case.get("split") or "dev",
+                     "expected": case["expected"], "predicted": predicted,
+                     "url": hint.get("url") or "",
+                     "fact_type": fact.type if fact else "",
+                     "confidence": round(fact.confidence, 3) if fact else 0.0})
+
+    total = len(rows)
+    correct = sum(1 for r in rows if r["expected"] == r["predicted"])
+    missed = [r for r in rows if r["expected"] == "fact" and r["predicted"] == "none"]
+    false_pos = [r for r in rows if r["expected"] == "none" and r["predicted"] == "fact"]
+    by_kind: dict[str, dict] = {}
+    for kind in sorted({r["kind"] or "unknown" for r in rows}):
+        sub = [r for r in rows if (r["kind"] or "unknown") == kind]
+        hit = sum(1 for r in sub if r["expected"] == r["predicted"])
+        by_kind[kind] = {"cases": len(sub), "accuracy": round(hit / len(sub), 4)}
+
+    report = {
+        "kind": "recall",
+        "version": version,
+        "min_conf": min_conf,
+        "cases": total,
+        "skipped": skipped,
+        "correct": correct,
+        "accuracy": round(correct / total, 4) if total else 0.0,
+        "missed": missed,
+        "false_positive": false_pos,
+        "by_kind": by_kind,
+        "rows": rows,
+        "evaluated_at": optstore.now(),
+    }
+    path = optstore.save_evaluation(f"recall-{version}", report)
+    report["evaluation_file"] = str(path)
+    optstore.append_audit({
+        "action": "recall_eval", "actor": actor, "version": version,
+        "cases": total, "missed": len(missed),
+        "false_positive": len(false_pos), "accuracy": report["accuracy"],
+        "report": path.name,
+    })
+    return report
+
+
+def collect_report(run_id: str, limit: int = 20) -> dict:
+    """读取某次运行的采集留痕：每路查询的召回统计、覆盖对照与被拒条目。
+
+    留痕在采集时写入 output/collect/<run_id>.jsonl 与 -gap.jsonl，统计随
+    runs.stats 落库。旧版本运行没有留痕，返回空列表而不是报错。
+    """
+    from ..infra import store
+
+    run_id = str(run_id or "").strip()
+    if not run_id:
+        raise ValueError("必须指定运行编号")
+    try:
+        store.init()
+        run = store.get_run(run_id)
+    except Exception as e:
+        raise ValueError(f"读取运行失败：{type(e).__name__}") from e
+    if not run:
+        raise ValueError(f"运行不存在：{run_id}")
+    stats = run.get("stats") or "{}"
+    if isinstance(stats, str):
+        try:
+            stats = json.loads(stats)
+        except ValueError:
+            stats = {}
+    collect = (stats or {}).get("collect") or {}
+    path = OUT_DIR / "collect" / f"{run_id}.jsonl"
+    gap_path = OUT_DIR / "collect" / f"{run_id}-gap.jsonl"
+    return {
+        "run_id": run_id,
+        "queries": collect.get("queries") or [],
+        "rejected": int(collect.get("rejected") or 0),
+        "failed": int(collect.get("failed") or 0),
+        "empty": int(collect.get("empty") or 0),
+        "log": path.name if path.exists() else "",
+        "rows": _read_jsonl(path, limit),
+        "coverage": (stats or {}).get("coverage") or {},
+        "gap_rows": _read_jsonl(gap_path, limit),
+        "gap_log": gap_path.name if gap_path.exists() else "",
+    }
+
+
+def _read_jsonl(path: pathlib.Path, limit: int) -> list[dict]:
+    """读前 limit 行 JSONL；文件缺失或某行损坏时跳过，不抛异常。"""
+    rows: list[dict] = []
+    if not path.exists():
+        return rows
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if len(rows) >= max(1, int(limit)):
+                break
+            if not line.strip():
+                continue
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                continue
+    except OSError:
+        return []
+    return rows
+
+
+def depth_report(base_id: str, cand_id: str) -> dict:
+    """对照两次运行：加深检索后新增了多少候选、文档与事实。
+
+    只读运行记录与文档，不联网。两次运行的新闻流随时间变化，结果只能作观察，
+    不是严格对照；也不因此自动修改页数或检索词。
+    """
+    from ..infra import store
+
+    base_id, cand_id = str(base_id or "").strip(), str(cand_id or "").strip()
+    if not base_id or not cand_id:
+        raise ValueError("必须指定两次运行编号")
+    if base_id == cand_id:
+        raise ValueError("两次运行不能是同一个编号")
+    try:
+        store.init()
+        base, cand = store.get_run(base_id), store.get_run(cand_id)
+    except Exception as e:
+        raise ValueError(f"读取运行失败：{type(e).__name__}") from e
+    for rid, run in ((base_id, base), (cand_id, cand)):
+        if not run:
+            raise ValueError(f"运行不存在：{rid}")
+    if base.get("company") != cand.get("company"):
+        raise ValueError("只能对照同一家公司的两次运行")
+
+    def _pack(run: dict, docs: list[dict], facts: list[dict]) -> dict:
+        stats = run.get("stats") or "{}"
+        if isinstance(stats, str):
+            try:
+                stats = json.loads(stats)
+            except ValueError:
+                stats = {}
+        params = run.get("params") or "{}"
+        if isinstance(params, str):
+            try:
+                params = json.loads(params)
+            except ValueError:
+                params = {}
+        queries = ((stats or {}).get("collect") or {}).get("queries") or []
+        urls = {d.get("url") or d.get("title") or d.get("id") for d in docs}
+        return {
+            "run_id": run["id"],
+            "company": run.get("company") or "",
+            "pages": int((params or {}).get("news_pages") or 0),
+            "terms_version": (params or {}).get("search_terms_version") or "",
+            "candidates": sum(int(q.get("raw") or 0) for q in queries),
+            "kept": sum(int(q.get("kept") or 0) for q in queries),
+            "ms": sum(int(q.get("ms") or 0) for q in queries),
+            "docs": len(urls),
+            "facts": len(facts),
+            "_urls": urls,
+            "_queries": {str(q.get("query") or ""): q for q in queries},
+            "_doc_facts": {f.get("doc_id") for f in facts if f.get("doc_id")},
+        }
+
+    base_docs, cand_docs = store.docs_of_run(base_id), store.docs_of_run(cand_id)
+    base_facts, cand_facts = store.facts_of_run(base_id), store.facts_of_run(cand_id)
+    b, c = _pack(base, base_docs, base_facts), _pack(cand, cand_docs, cand_facts)
+    new_urls = c["_urls"] - b["_urls"]
+    overlap = b["_urls"] & c["_urls"]
+    new_doc_ids = {d.get("id") for d in cand_docs
+                   if (d.get("url") or d.get("title") or d.get("id")) in new_urls}
+    new_with_fact = len(new_doc_ids & c["_doc_facts"])
+
+    per_query = []
+    for q in sorted(set(b["_queries"]) | set(c["_queries"])):
+        br = b["_queries"].get(q) or {}
+        cr = c["_queries"].get(q) or {}
+        per_query.append({"query": q,
+                          "base_raw": int(br.get("raw") or 0),
+                          "cand_raw": int(cr.get("raw") or 0),
+                          "base_kept": int(br.get("kept") or 0),
+                          "cand_kept": int(cr.get("kept") or 0)})
+    per_query.sort(key=lambda r: r["cand_raw"] - r["base_raw"], reverse=True)
+
+    report = {
+        "kind": "depth",
+        "base": {k: v for k, v in b.items() if not k.startswith("_")},
+        "cand": {k: v for k, v in c.items() if not k.startswith("_")},
+        "candidates": {"base": b["candidates"], "cand": c["candidates"],
+                       "delta": c["candidates"] - b["candidates"]},
+        "kept": {"base": b["kept"], "cand": c["kept"],
+                 "delta": c["kept"] - b["kept"]},
+        "docs": {"base": b["docs"], "cand": c["docs"],
+                 "new": len(new_urls), "overlap": len(overlap)},
+        "new_docs_with_fact": new_with_fact,
+        "ms": {"base": b["ms"], "cand": c["ms"]},
+        "terms_changed": b["terms_version"] != c["terms_version"],
+        "per_query": per_query,
+        "note": "两次运行的时间窗与新闻流不同，结果只能作观察，不是严格对照",
+        "evaluated_at": optstore.now(),
+    }
+    path = optstore.save_evaluation(f"depth-{base_id}-{cand_id}", report)
+    report["report_file"] = str(path)
+    optstore.append_audit({"action": "depth_eval", "base": base_id, "cand": cand_id,
+                           "new_docs": len(new_urls), "report": path.name})
+    return report
 
 
 def evaluate(candidate: dict, cases: list[dict], base_rules=None, base_version=None,

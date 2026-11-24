@@ -457,6 +457,53 @@ def save_facts(run_id: str, entity_key: str, facts: list[dict]) -> None:
                  f.get("dedupe_key", ""), f.get("corroboration", 1), now()))
 
 
+def facts_with_doc(limit: int = 200, entity_key: str = ""):
+    """事实连同来源文档标题与链接，供人工复核和离线评测集沉淀。
+
+    只做联表读取，不判断事实对错；标准答案必须由人读原文后标注。
+    """
+    sql = ("SELECT f.id AS fact_id, f.run_id, f.entity_key, f.type, f.type_label, "
+           "f.statement, f.evidence_quote, f.confidence, f.created_at, "
+           "d.id AS doc_id, d.title AS doc_title, d.url AS url, d.kind AS doc_kind, "
+           "d.evidence_level AS evidence_level, d.body AS doc_body "
+           "FROM facts f JOIN documents d ON d.id = f.doc_id")
+    args: list = []
+    if entity_key:
+        sql += " WHERE f.entity_key=?"
+        args.append(entity_key)
+    sql += " ORDER BY f.created_at DESC, f.id LIMIT ?"
+    args.append(max(1, int(limit)))
+    rows = conn().execute(sql, tuple(args)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def docs_with_fact_state(limit: int = 200, entity_key: str = "",
+                         only_blind: bool = True):
+    """文档连同事实数与检索词，供召回评测标注。
+
+    only_blind=True 只返回没有产出事实的文档——这是抽取与检索的盲区；
+    False 时连已产出事实的文档一起返回，用于检查误报。
+    """
+    sql = ("SELECT d.id AS doc_id, d.run_id, d.entity_key, d.kind, d.title, d.url, "
+           "d.source, d.published_at, d.body, d.evidence_level, d.extra, "
+           "(SELECT COUNT(*) FROM facts f WHERE f.doc_id = d.id) AS fact_count, "
+           "(SELECT f.type FROM facts f WHERE f.doc_id = d.id ORDER BY f.id LIMIT 1) AS fact_type "
+           "FROM documents d")
+    where: list[str] = []
+    args: list = []
+    if entity_key:
+        where.append("d.entity_key=?")
+        args.append(entity_key)
+    if only_blind:
+        where.append("NOT EXISTS (SELECT 1 FROM facts f WHERE f.doc_id = d.id)")
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY d.id DESC LIMIT ?"
+    args.append(max(1, int(limit)))
+    rows = conn().execute(sql, tuple(args)).fetchall()
+    return [dict(r) for r in rows]
+
+
 def clear_facts(run_id: str) -> None:
     with tx() as c:
         c.execute("DELETE FROM facts WHERE run_id=?", (run_id,))

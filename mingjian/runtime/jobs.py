@@ -193,7 +193,7 @@ def _compare_worker(job: dict, names: list[str], cfg, self_key: str = "") -> Non
 
 def _cfg_from_params(params: dict, max_fetch_cap: int = 40):
     cfg = copy.copy(CFG)
-    for k in ("days", "max_news", "max_ann", "max_fetch"):
+    for k in ("days", "max_news", "max_ann", "max_fetch", "news_pages"):
         v = params.get(k)
         if v is None:
             continue

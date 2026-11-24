@@ -11,7 +11,7 @@
   竞品矩阵      —— 维度×公司对齐，空维度不占行
   技能与记忆    —— 注册表拦截、参数校验、记忆去重/召回/删除、上下文预算截断
   调度与落库    —— 每天/每周下次触发时间、事件 seq、检查点、定时任务读写
-  离线优化      —— 候选校验、基线对照、门禁拒绝、上线与回滚
+  离线优化      —— 候选校验、基线对照、门禁拒绝、草案抽取、待标注采集、上线与回滚
 
 纯函数为主，不依赖网络；联网链路由 API 冒烟另行验证。
 """
@@ -663,6 +663,611 @@ def _optimizer_gate():
             raise AssertionError("门禁未通过的候选不应上线")
         assert extract.active_version() == "baseline"
     finally:
+        optstore.OPT_DIR = old_opt
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@case("离线优化草案：误判样本抽词、不上线、非法候选被拒")
+def _optimizer_draft():
+    import shutil
+    import tempfile
+
+    from mingjian.infra import optstore
+
+    tmpdir = pathlib.Path(tempfile.mkdtemp(prefix="mingjian_draft_"))
+    old_opt = optstore.OPT_DIR
+    cases_path = ROOT / "tools" / "optimizer" / "event_cases.jsonl"
+    optstore.OPT_DIR = tmpdir / "opt"
+    try:
+        result = optimizer.draft(cases_path, tmpdir / "drafts")
+        path = pathlib.Path(result["path"])
+        assert path.exists() and path.parent == tmpdir / "drafts", result["path"]
+        cand = optimizer.load_candidate(path)
+        assert "联合研发" in cand["add_keywords"].get("product", []), cand
+        assert "战略投资" in cand["add_keywords"].get("finance", []), cand
+        reviewed = {row["id"]: row["word"] for row in result["reviewed"]}
+        assert reviewed.get("C17") == "联合研发", reviewed
+        assert reviewed.get("C18") == "战略投资", reviewed
+
+        report = optimizer.evaluate(cand, optimizer.load_cases(cases_path),
+                                    base_rules=extract.default_rules(),
+                                    base_version="baseline")
+        assert report["gate"]["passed"], report["gate"]
+        assert not report["errors"]["new"], report["errors"]
+        assert extract.active_version() == "baseline", "草案不应改变生效规则"
+
+        try:
+            optimizer.draft(cases_path, tmpdir / "drafts", version=cand["version"])
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("同名草案不应覆盖已有文件")
+
+        bad_candidates = [
+            {"kind": "other_rules", "version": "draft-bad-01",
+             "add_keywords": {"product": ["联合研发"]}},
+            {"kind": "event_rules", "version": "draft-bad-02",
+             "add_keywords": {"other": ["联合研发"]}},
+            {"kind": "event_rules", "version": "draft-bad-03",
+             "add_keywords": {"product": ["联合研发"]}, "rules": []},
+            {"kind": "event_rules", "version": "draft-bad-04",
+             "add_keywords": {"product": ["联合\n研发"]}},
+            {"kind": "event_rules", "version": "../draft-bad-05",
+             "add_keywords": {"product": ["联合研发"]}},
+        ]
+        for item in bad_candidates:
+            try:
+                optimizer.validate_candidate(item)
+            except ValueError:
+                continue
+            raise AssertionError(f"非法候选应被拒绝：{item}")
+    finally:
+        optstore.OPT_DIR = old_opt
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@case("离线优化采集：运行事实导出待标注样本，不自动打标")
+def _optimizer_harvest():
+    import json
+    import shutil
+    import tempfile
+
+    from mingjian.infra import optstore
+
+    tmpdir = pathlib.Path(tempfile.mkdtemp(prefix="mingjian_harvest_"))
+    old_opt, old_path, old_url = optstore.OPT_DIR, store.DB_PATH, store.DB_URL
+    old_conn = getattr(store._local, "conn", None)
+    optstore.OPT_DIR = tmpdir / "opt"
+    store.DB_PATH = tmpdir / "h.db"
+    store.DB_URL = ""
+    store._local.conn = None
+    cases_path = ROOT / "tools" / "optimizer" / "event_cases.jsonl"
+    try:
+        store.init()
+        store.create_run("R1", "某某企业", "某某企业", {})
+        store.add_document({"id": "D1", "run_id": "R1", "entity_key": "某某企业",
+                            "kind": "news", "title": "某某企业发布新型控制器",
+                            "url": "https://example.invalid/a", "body": "正文摘要",
+                            "evidence_level": "full"})
+        store.add_document({"id": "D2", "run_id": "R1", "entity_key": "某某企业",
+                            "kind": "announcement", "title": "某某企业翌日披露报表",
+                            "url": "https://example.invalid/b", "body": "",
+                            "evidence_level": "full"})
+        store.save_facts("R1", "某某企业", [
+            {"id": "F1", "doc_id": "D1", "type": "product", "statement": "发布新品"},
+            {"id": "F2", "doc_id": "D2", "type": "other", "statement": "例行披露"},
+        ])
+
+        result = optimizer.harvest(tmpdir / "cases", limit=10, cases_path=cases_path)
+        assert result["count"] == 1, result
+        assert result["skipped"]["routine"] == 1, result["skipped"]
+        lines = pathlib.Path(result["path"]).read_text(encoding="utf-8").splitlines()
+        item = json.loads(lines[0])
+        assert item["expected"] == "", item
+        assert item["title"] == "某某企业发布新型控制器", item
+        assert item["split"] == "dev", item
+        assert item["hint"]["predicted"] == "product", item
+        assert item["hint"]["url"].startswith("https://"), item
+
+        # 待标注样本 expected 为空，不能直接当评测集跑
+        try:
+            optimizer.load_cases(result["path"])
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("待标注样本不应直接当作评测集")
+
+        # 再采一次：同一标题已在上一份产物里，不应重复导出
+        again = optimizer.harvest(tmpdir / "cases", limit=10, cases_path=result["path"])
+        assert again["count"] == 0, again
+        assert again["skipped"]["duplicate"] == 1, again["skipped"]
+    finally:
+        if getattr(store._local, "conn", None) is not None:
+            store._local.conn.close()
+        store._local.conn = old_conn
+        store.DB_PATH = old_path
+        store.DB_URL = old_url
+        optstore.OPT_DIR = old_opt
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@case("离线优化门禁：预测分布偏移拦截结构漂移")
+def _optimizer_shift():
+    base = {"per_label": {"order": {"predicted": 6}, "product": {"predicted": 4}}}
+    same = {"per_label": {"order": {"predicted": 5}, "product": {"predicted": 5}}}
+    wild = {"per_label": {"order": {"predicted": 1}, "product": {"predicted": 9}}}
+    assert optimizer._label_shift(base, same, 24) == []
+    moved = optimizer._label_shift(base, wild, 24)
+    assert {row["label"] for row in moved} == {"order", "product"}, moved
+    # 小评测集上允许条数不得降到 1，避免正常修正被误杀
+    assert optimizer._label_shift(base, same, 12) == []
+
+
+@case("离线召回评测：文档盲区导出与漏检/误报统计")
+def _optimizer_recall():
+    import json
+    import shutil
+    import tempfile
+
+    from mingjian.infra import optstore
+
+    tmpdir = pathlib.Path(tempfile.mkdtemp(prefix="mingjian_recall_"))
+    old_opt, old_path, old_url = optstore.OPT_DIR, store.DB_PATH, store.DB_URL
+    old_conn = getattr(store._local, "conn", None)
+    optstore.OPT_DIR = tmpdir / "opt"
+    store.DB_PATH = tmpdir / "r.db"
+    store.DB_URL = ""
+    store._local.conn = None
+    try:
+        store.init()
+        store.create_run("R1", "某某企业", "某某企业", {})
+        long_body = "某某企业近日披露了相关经营进展，" + "正文内容。" * 30
+        store.add_document({"id": "D1", "run_id": "R1", "entity_key": "某某企业",
+                            "kind": "news", "title": "某某企业发布新型控制器",
+                            "url": "https://example.invalid/a", "body": long_body,
+                            "evidence_level": "full",
+                            "extra": {"query": "某某企业 订单 合作 中标"}})
+        store.add_document({"id": "D2", "run_id": "R1", "entity_key": "某某企业",
+                            "kind": "announcement", "title": "某某企业翌日披露报表",
+                            "url": "https://example.invalid/b", "body": long_body,
+                            "evidence_level": "full"})
+        store.add_document({"id": "D3", "run_id": "R1", "entity_key": "某某企业",
+                            "kind": "news", "title": "某某企业签订大额订单",
+                            "url": "https://example.invalid/c", "body": long_body,
+                            "evidence_level": "full"})
+        store.add_document({"id": "D4", "run_id": "R1", "entity_key": "某某企业",
+                            "kind": "news", "title": "某某企业新品发布",
+                            "url": "https://example.invalid/d", "body": "太短",
+                            "evidence_level": "title"})
+        store.save_facts("R1", "某某企业", [
+            {"id": "F1", "doc_id": "D3", "type": "order", "statement": "签订订单"},
+        ])
+
+        result = optimizer.harvest_docs(tmpdir / "cases", limit=10)
+        assert result["count"] == 1, result
+        assert result["skipped"]["routine"] == 1, result["skipped"]
+        assert result["skipped"]["no_body"] == 1, result["skipped"]
+        item = json.loads(pathlib.Path(result["path"]).read_text(encoding="utf-8").splitlines()[0])
+        assert item["id"] == "D0001", item
+        assert item["expected"] == "", item
+        assert item["hint"]["predicted"] == "none", item
+        assert item["hint"]["fact_count"] == 0, item
+        assert item["hint"]["names"] == ["某某企业"], item
+        assert item["hint"]["query"] == "某某企业 订单 合作 中标", item
+
+        # 待标注召回样本 expected 为空，不能直接当评测集跑
+        try:
+            optimizer.load_doc_cases(result["path"])
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("待标注召回样本不应直接当作评测集")
+
+        again = optimizer.harvest_docs(tmpdir / "cases", limit=10, cases_path=result["path"])
+        assert again["count"] == 0, again
+        assert again["skipped"]["duplicate"] == 1, again["skipped"]
+
+        covered = optimizer.harvest_docs(tmpdir / "cases2", limit=10, include_covered=True)
+        assert covered["count"] == 2, covered
+        rows = [json.loads(line) for line in
+                pathlib.Path(covered["path"]).read_text(encoding="utf-8").splitlines()]
+        preds = {row["title"]: row["hint"]["predicted"] for row in rows}
+        assert preds["某某企业签订大额订单"] == "fact", preds
+        assert preds["某某企业发布新型控制器"] == "none", preds
+
+        # 评测：R1 正确；R2 强信号但标 none → 误报；R3 主体名不符 → 漏检
+        body = "某某企业近日与客户签订5亿元订单。" + "订单交付与验收按合同执行。" * 20
+        cases = [
+            {"id": "R1", "title": "某某企业签订5亿元订单", "body": body,
+             "expected": "fact", "split": "dev",
+             "hint": {"kind": "announcement", "evidence_level": "full",
+                      "names": ["某某企业"], "url": "https://example.invalid/1"}},
+            {"id": "R2", "title": "某某企业新增年产10万吨产能项目", "body": body,
+             "expected": "none", "split": "dev",
+             "hint": {"kind": "announcement", "evidence_level": "full",
+                      "names": ["某某企业"], "url": "https://example.invalid/2"}},
+            {"id": "R3", "title": "某某企业发布业绩预告",
+             "body": "某某企业预计净利润同比增长。",
+             "expected": "fact", "split": "dev",
+             "hint": {"kind": "news", "names": ["甲公司"],
+                      "url": "https://example.invalid/3"}},
+        ]
+        report = optimizer.recall(cases)
+        assert report["cases"] == 3, report
+        assert [row["id"] for row in report["missed"]] == ["R3"], report["missed"]
+        assert [row["id"] for row in report["false_positive"]] == ["R2"], report["false_positive"]
+        assert report["accuracy"] == 0.3333, report["accuracy"]
+        assert report["min_conf"] > 0, report
+        assert pathlib.Path(report["evaluation_file"]).name.startswith("recall-"), report
+    finally:
+        if getattr(store._local, "conn", None) is not None:
+            store._local.conn.close()
+        store._local.conn = old_conn
+        store.DB_PATH = old_path
+        store.DB_URL = old_url
+        optstore.OPT_DIR = old_opt
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@case("检索词版本：文件覆盖、非法回退与查询构造")
+def _searchterms_version():
+    import inspect
+    import json
+    import shutil
+    import tempfile
+
+    from mingjian.infra import optstore
+    from mingjian.infra.sources import eastmoney
+    from mingjian.services import searchterms, skills
+
+    tmpdir = pathlib.Path(tempfile.mkdtemp(prefix="mingjian_terms_"))
+    old_opt = optstore.OPT_DIR
+    optstore.OPT_DIR = tmpdir
+    try:
+        assert searchterms.DEFAULT_TERMS == eastmoney.DEFAULT_TERMS
+        base = searchterms.load()
+        assert base["version"] == "baseline", base
+        assert base["terms"] == list(eastmoney.DEFAULT_TERMS), base
+
+        path = tmpdir / "search_terms.json"
+        payload = {"version": "terms-20261124-01",
+                   "terms": ["扩产 产能", "固态电池", "扩产 产能"]}
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        loaded = searchterms.load()
+        assert loaded["version"] == "terms-20261124-01", loaded
+        assert loaded["terms"] == ["扩产 产能", "固态电池"], loaded
+        assert searchterms.active_version() == "terms-20261124-01"
+        qs = eastmoney.queries_for("某某企业", loaded["terms"])
+        assert qs == ["某某企业", "某某企业 扩产 产能", "某某企业 固态电池"], qs
+        assert eastmoney.queries_for("  ") == []
+
+        for bad in ({"version": "../terms", "terms": ["扩产 产能", "固态电池"]},
+                    {"version": "terms-bad-1", "terms": ["扩产 产能"]},
+                    {"version": "terms-bad-2", "terms": ["扩产 产能", "x" * 41]}):
+            path.write_text(json.dumps(bad, ensure_ascii=False), encoding="utf-8")
+            assert searchterms.load()["version"] == "baseline", bad
+
+        # 技能里的采集导入曾写成 from .sources，运行时才会报错；这里做静态防回归
+        assert "from .sources" not in inspect.getsource(skills), \
+            "技能里的采集导入必须指向 infra.sources"
+    finally:
+        optstore.OPT_DIR = old_opt
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@case("采集留痕：每路统计、被拒条目与运行可回看")
+def _collect_trace():
+    import json
+    import shutil
+    import tempfile
+
+    from mingjian.infra.sources import eastmoney
+    from mingjian.services import optimizer
+
+    # 1) news_bundle 留痕：替换网络检索，构造一入一异一重
+    def fake_search(keyword, page=1, size=10, meta=None):
+        if meta is not None:
+            meta.update({"status": "ok", "error": "", "ms": 1, "raw": 3})
+        if page > 1:
+            return []
+        return [
+            {"kind": "news", "title": "某某企业扩产项目投产",
+             "url": "https://example.invalid/1", "source": "测试源",
+             "published_at": "2026-11-20", "body": "某某企业新增产线", "extra": {}},
+            {"kind": "news", "title": "行业景气度回升",
+             "url": "https://example.invalid/2", "source": "测试源",
+             "published_at": "2026-11-20", "body": "行业整体回暖", "extra": {}},
+            {"kind": "news", "title": "某某企业扩产项目投产",
+             "url": "https://example.invalid/3", "source": "测试源",
+             "published_at": "2026-11-20", "body": "", "extra": {}},
+        ]
+
+    old_search = eastmoney.search
+    eastmoney.search = fake_search
+    try:
+        trace: dict = {}
+        items = eastmoney.news_bundle("某某企业", "某某企业",
+                                      terms=["扩产 产能"], trace=trace)
+    finally:
+        eastmoney.search = old_search
+    assert [it["url"] for it in items] == ["https://example.invalid/1"], items
+    stats = {q["query"]: q for q in trace["queries"]}
+    first = stats["某某企业"]
+    assert (first["raw"], first["kept"]) == (3, 1), first
+    assert (first["duplicate"], first["irrelevant"]) == (1, 1), first
+    assert first["status"] == "ok", first
+    assert first["ms"] >= 0, first
+    second = stats["某某企业 扩产 产能"]
+    assert (second["raw"], second["kept"]) == (3, 0), second
+    assert (second["duplicate"], second["irrelevant"]) == (2, 1), second
+    assert second["status"] == "ok", second
+    reasons = [row["reason"] for row in trace["rejected"]]
+    assert reasons.count("duplicate") == 3, reasons
+    assert reasons.count("irrelevant") == 2, reasons
+    assert all(row["query"] and row["title"] for row in trace["rejected"])
+
+    # 2) collect_report 读回：统计在库里，明细在 output/collect/
+    tmpdir = pathlib.Path(tempfile.mkdtemp(prefix="mingjian_collect_"))
+    old_path, old_url = store.DB_PATH, store.DB_URL
+    old_conn = getattr(store._local, "conn", None)
+    old_out = optimizer.OUT_DIR
+    store.DB_PATH = tmpdir / "c.db"
+    store.DB_URL = ""
+    store._local.conn = None
+    optimizer.OUT_DIR = tmpdir / "out"
+    try:
+        store.init()
+        store.create_run("R1", "某某企业", "某某企业", {})
+        store.finish_run("R1", "done", {"collect": {"queries": trace["queries"],
+                                                    "rejected": 2, "failed": 0,
+                                                    "empty": 0, "log": "R1.jsonl"},
+                                        "coverage": {"announcements": 2, "covered": 1,
+                                                     "gap": 1, "ratio": 0.5,
+                                                     "threshold": 0.4, "skipped": 0,
+                                                     "log": "R1-gap.jsonl"}})
+        log_dir = tmpdir / "out" / "collect"
+        log_dir.mkdir(parents=True)
+        lines = [json.dumps({"run_id": "R1", **row}, ensure_ascii=False)
+                 for row in trace["rejected"][:2]]
+        (log_dir / "R1.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        (log_dir / "R1-gap.jsonl").write_text(
+            json.dumps({"run_id": "R1", "id": "D9", "title": "关于修订章程的公告",
+                        "score": 0.12, "covered": False}, ensure_ascii=False) + "\n",
+            encoding="utf-8")
+
+        one = optimizer.collect_report("R1", limit=1)
+        assert one["run_id"] == "R1", one
+        assert len(one["queries"]) == 2, one
+        assert one["rejected"] == 2, one
+        assert (one["failed"], one["empty"]) == (0, 0), one
+        assert one["log"] == "R1.jsonl", one
+        assert len(one["rows"]) == 1, one
+        assert one["rows"][0]["run_id"] == "R1", one["rows"]
+        assert one["rows"][0]["reason"] in ("duplicate", "irrelevant"), one["rows"]
+        assert one["coverage"]["covered"] == 1, one
+        assert one["gap_log"] == "R1-gap.jsonl", one
+        assert len(one["gap_rows"]) == 1, one
+        assert one["gap_rows"][0]["id"] == "D9", one["gap_rows"]
+        assert len(optimizer.collect_report("R1", limit=20)["rows"]) == 2
+
+        # 旧版本运行没有 collect 统计：返回空而不是报错
+        store.create_run("R2", "甲公司", "甲公司", {})
+        empty = optimizer.collect_report("R2")
+        assert empty["queries"] == [] and empty["rows"] == [], empty
+
+        for bad in ("", "R404"):
+            try:
+                optimizer.collect_report(bad)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("无效运行编号应报错")
+    finally:
+        if getattr(store._local, "conn", None) is not None:
+            store._local.conn.close()
+        store._local.conn = old_conn
+        store.DB_PATH = old_path
+        store.DB_URL = old_url
+        optimizer.OUT_DIR = old_out
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@case("检索状态：成功、空结果与失败可区分")
+def _search_status():
+    from mingjian.core import net
+    from mingjian.infra.sources import eastmoney
+
+    class _Resp:
+        def __init__(self, text):
+            self.text = text
+
+    ok_body = ('cb({"result":{"cmsArticleWebOld":[{"title":"<em>某某</em>企业扩产",'
+               '"url":"https://example.invalid/a","mediaName":"测试源",'
+               '"date":"2026-11-20 10:00:00","content":"正文","code":"1"}]}})')
+    old_fetch = net.fetch
+    try:
+        net.fetch = lambda url, headers=None: _Resp(ok_body)
+        meta: dict = {}
+        items = eastmoney.search("某某企业", meta=meta)
+        assert len(items) == 1 and items[0]["title"] == "某某企业扩产", items
+        assert meta["status"] == "ok", meta
+        assert meta["raw"] == 1 and meta["ms"] >= 0 and not meta["error"], meta
+
+        net.fetch = lambda url, headers=None: _Resp('cb({"result":{"cmsArticleWebOld":[]}})')
+        meta = {}
+        assert eastmoney.search("某某企业", meta=meta) == []
+        assert meta["status"] == "empty", meta
+
+        net.fetch = lambda url, headers=None: _Resp("oops")
+        meta = {}
+        assert eastmoney.search("某某企业", meta=meta) == []
+        assert meta["status"] == "error" and "JSONP" in meta["error"], meta
+
+        def boom(url, headers=None):
+            raise net.FetchError(url, "HTTP 403", 403)
+        net.fetch = boom
+        meta = {}
+        assert eastmoney.search("某某企业", meta=meta) == []
+        assert meta["status"] == "error" and "403" in meta["error"], meta
+    finally:
+        net.fetch = old_fetch
+
+    # news_bundle 逐路收敛状态：一路失败不影响其余路的结果
+    def partial_search(keyword, page=1, size=10, meta=None):
+        if "扩产" in keyword:
+            if meta is not None:
+                meta.update({"status": "error", "error": "FetchError 503",
+                             "ms": 3, "raw": 0})
+            return []
+        if meta is not None:
+            meta.update({"status": "ok", "error": "", "ms": 2, "raw": 1})
+        return [{"kind": "news", "title": "某某企业发布新品",
+                 "url": "https://example.invalid/ok", "source": "测试源",
+                 "published_at": "2026-11-20", "body": "某某企业新品", "extra": {}}]
+
+    def empty_search(keyword, page=1, size=10, meta=None):
+        if meta is not None:
+            meta.update({"status": "empty", "error": "", "ms": 1, "raw": 0})
+        return []
+
+    old_search = eastmoney.search
+    try:
+        eastmoney.search = partial_search
+        trace: dict = {}
+        items = eastmoney.news_bundle("某某企业", "某某企业",
+                                      terms=["扩产 产能"], trace=trace)
+        assert [it["url"] for it in items] == ["https://example.invalid/ok"], items
+        failed = [q for q in trace["queries"] if q["status"] == "error"]
+        assert len(failed) == 1 and "503" in failed[0]["error"], trace["queries"]
+        assert failed[0]["ms"] == 3, failed[0]
+
+        eastmoney.search = empty_search
+        trace = {}
+        eastmoney.news_bundle("某某企业", "某某企业", terms=["扩产 产能"], trace=trace)
+        assert all(q["status"] == "empty" for q in trace["queries"]), trace
+    finally:
+        eastmoney.search = old_search
+
+
+@case("公告覆盖：命中、缺口与分数排序")
+def _coverage_gap():
+    from mingjian.services import coverage
+
+    anns = [
+        {"id": "A1", "kind": "announcement", "title": "关于回购股份的公告",
+         "published_at": "2026-11-20", "url": "https://example.invalid/a1"},
+        {"id": "A2", "kind": "announcement", "title": "关于签订重大合同的公告",
+         "published_at": "2026-11-20", "url": "https://example.invalid/a2"},
+        {"id": "A3", "kind": "announcement", "title": "关于修订公司章程的公告",
+         "published_at": "2026-11-20", "url": "https://example.invalid/a3"},
+        {"id": "A4", "kind": "announcement", "title": "公告",
+         "published_at": "2026-11-20", "url": "https://example.invalid/a4"},
+    ]
+    news = [
+        {"id": "N1", "kind": "news", "title": "某某企业拟回购股份",
+         "body": "某某企业今日披露回购方案", "url": "https://example.invalid/n1"},
+        {"id": "N2", "kind": "news", "title": "某某企业签订5亿元合同",
+         "body": "合同金额5亿元，工期两年", "url": "https://example.invalid/n2"},
+    ]
+    report = coverage.announcement_gap(anns, news)
+    assert report["announcements"] == 3, report   # A4 归一后太短，不参与
+    assert report["skipped"] == 1, report
+    assert report["covered"] == 2, report
+    assert report["gap"] == 1, report
+    assert 0 < report["ratio"] < 1, report
+    by_id = {r["id"]: r for r in report["rows"]}
+    assert by_id["A1"]["covered"] is True, by_id["A1"]
+    assert by_id["A1"]["best"]["title"] == "某某企业拟回购股份", by_id["A1"]
+    assert by_id["A2"]["covered"] is True, by_id["A2"]
+    assert by_id["A3"]["covered"] is False, by_id["A3"]
+    assert by_id["A3"]["best"] == {}, by_id["A3"]
+    assert report["rows"][0]["id"] == "A3", report["rows"]   # 升序，缺口在前
+
+    empty = coverage.announcement_gap([], news)
+    assert empty["announcements"] == 0 and empty["ratio"] == 0.0, empty
+    no_news = coverage.announcement_gap(anns[:1], [])
+    assert no_news["covered"] == 0 and no_news["gap"] == 1, no_news
+
+
+@case("深度对照：两次运行的候选、新增文档与事实")
+def _optimizer_depth():
+    import shutil
+    import tempfile
+
+    from mingjian.infra import optstore
+    from mingjian.services import optimizer
+
+    tmpdir = pathlib.Path(tempfile.mkdtemp(prefix="mingjian_depth_"))
+    old_opt, old_path, old_url = optstore.OPT_DIR, store.DB_PATH, store.DB_URL
+    old_conn = getattr(store._local, "conn", None)
+    optstore.OPT_DIR = tmpdir / "opt"
+    store.DB_PATH = tmpdir / "d.db"
+    store.DB_URL = ""
+    store._local.conn = None
+    try:
+        store.init()
+        store.create_run("R1", "某某企业", "某某企业",
+                         {"news_pages": 3, "search_terms_version": "baseline"})
+        store.finish_run("R1", "done", {"collect": {"queries": [
+            {"query": "某某企业", "raw": 10, "kept": 2, "ms": 100, "status": "ok"},
+            {"query": "某某企业 扩产 产能", "raw": 10, "kept": 1, "ms": 120,
+             "status": "ok"}]}})
+        store.add_document({"id": "D1", "run_id": "R1", "entity_key": "某某企业",
+                            "kind": "news", "title": "某某企业扩产",
+                            "url": "https://example.invalid/u1"})
+        store.add_document({"id": "D2", "run_id": "R1", "entity_key": "某某企业",
+                            "kind": "news", "title": "某某企业签约",
+                            "url": "https://example.invalid/u2"})
+
+        store.create_run("R2", "某某企业", "某某企业",
+                         {"news_pages": 6, "search_terms_version": "baseline"})
+        store.finish_run("R2", "done", {"collect": {"queries": [
+            {"query": "某某企业", "raw": 20, "kept": 5, "ms": 200, "status": "ok"},
+            {"query": "某某企业 扩产 产能", "raw": 20, "kept": 3, "ms": 210,
+             "status": "ok"}]}})
+        store.add_document({"id": "D3", "run_id": "R2", "entity_key": "某某企业",
+                            "kind": "news", "title": "某某企业扩产",
+                            "url": "https://example.invalid/u1"})
+        store.add_document({"id": "D4", "run_id": "R2", "entity_key": "某某企业",
+                            "kind": "news", "title": "某某企业新订单",
+                            "url": "https://example.invalid/u3"})
+        store.add_document({"id": "D5", "run_id": "R2", "entity_key": "某某企业",
+                            "kind": "news", "title": "某某企业新产线",
+                            "url": "https://example.invalid/u4"})
+        store.save_facts("R2", "某某企业", [
+            {"id": "F1", "doc_id": "D4", "type": "order", "statement": "新增订单"},
+        ])
+
+        report = optimizer.depth_report("R1", "R2")
+        assert report["base"]["pages"] == 3 and report["cand"]["pages"] == 6, report
+        assert report["candidates"] == {"base": 20, "cand": 40, "delta": 20}, report
+        assert report["kept"] == {"base": 3, "cand": 8, "delta": 5}, report
+        assert report["docs"] == {"base": 2, "cand": 3, "new": 2, "overlap": 1}, report
+        assert report["new_docs_with_fact"] == 1, report
+        assert report["ms"] == {"base": 220, "cand": 410}, report
+        assert report["terms_changed"] is False, report
+        assert report["per_query"][0]["query"] == "某某企业", report["per_query"]
+        assert pathlib.Path(report["report_file"]).name.startswith("depth-"), report
+
+        for bad in (("R1", "R1"), ("R1", "R404")):
+            try:
+                optimizer.depth_report(*bad)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("无效对照应报错")
+        store.create_run("R3", "甲公司", "甲公司", {})
+        try:
+            optimizer.depth_report("R1", "R3")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("不同公司不应允许对照")
+    finally:
+        if getattr(store._local, "conn", None) is not None:
+            store._local.conn.close()
+        store._local.conn = old_conn
+        store.DB_PATH, store.DB_URL = old_path, old_url
         optstore.OPT_DIR = old_opt
         shutil.rmtree(tmpdir, ignore_errors=True)
 

@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -18,9 +19,10 @@ from ..core import pdftext
 from ..core.textproc import cjk_count, clip, extract_main, page_title
 from ..infra import llm, store
 from ..infra.sources import cninfo, eastmoney
-from ..services import diff, memory
+from ..services import coverage, diff, memory
 from ..services import extract as EX
 from ..services import report as R
+from ..services import searchterms as ST
 
 
 def _now() -> str:
@@ -54,9 +56,11 @@ class Pipeline:
         self.report_md = ""
         self.stats: dict = {}
         self.errors: list[str] = []
-        # 运行开始时固定规则版本：中途上线新版本不影响本次运行，续跑也按原版本
+        # 运行开始时固定规则与检索词版本：中途上线新版本不影响本次运行
         self.event_rules_version = ""
         self.event_rules: list[dict] | None = None
+        self.search_terms_version = ""
+        self.search_terms: list[str] = []
 
     # ---- 事件 ----
     def _log(self, msg: str, level: str = "info") -> None:
@@ -78,6 +82,8 @@ class Pipeline:
         store.init()
         self.event_rules_version = EX.active_version()
         self.event_rules = EX.rules_for_version(self.event_rules_version)
+        self.search_terms_version = ST.active_version()
+        self.search_terms = ST.active_terms()
         try:
             if not self.resume:
                 # 新运行使用新编号；若人为复用编号，先清掉旧产物，避免新旧材料混在一起
@@ -136,6 +142,7 @@ class Pipeline:
             "entity_key": self.entity_key, "entity": self.entity,
             "profile": self.profile, "quote": self.quote, "stats": self.stats,
             "event_rules_version": self.event_rules_version,
+            "search_terms_version": self.search_terms_version,
         })
 
     def _restore(self) -> int:
@@ -152,6 +159,13 @@ class Pipeline:
         self.stats = p.get("stats") or {}
         self.event_rules_version = p.get("event_rules_version") or self.event_rules_version or "baseline"
         self.event_rules = EX.rules_for_version(self.event_rules_version)
+        if int(cp["step"]) >= 2:
+            # 第 2 步已完成，检索词不再使用；保留当次采集记录的版本号
+            self.search_terms_version = p.get("search_terms_version") or self.search_terms_version
+        else:
+            # 会重跑第 2 步，检索词取当次生效值，版本号同步
+            self.search_terms_version = ST.active_version()
+            self.search_terms = ST.active_terms()
         name = self.entity.get("short_name") or self.company
         self._log(f"从第 {cp['step']} 步检查点续跑（{name}）", "ok")
         return int(cp["step"])
@@ -219,6 +233,7 @@ class Pipeline:
         )
         params = self.cfg.to_dict()
         params["event_rules_version"] = self.event_rules_version or EX.active_version()
+        params["search_terms_version"] = self.search_terms_version or ST.active_version()
         store.create_run(self.run_id, self.entity_key, self.company, params)
         self._save_cp(1)
         self._step(1, "实体解析", "done", f"{name} {ent.get('code') or ''}".strip())
@@ -243,10 +258,21 @@ class Pipeline:
                 self.errors.append(f"公告采集失败：{e}")
                 self._log(f"公告采集失败：{type(e).__name__}", "warn")
 
+        trace: dict = {}
         try:
             news = eastmoney.news_bundle(self.company, ent.get("short_name") or self.company,
-                                         days=self.cfg.days)
-            self._log(f"资讯检索：取得 {len(news)} 条（已按主体相关度过滤）")
+                                         days=self.cfg.days,
+                                         terms=self.search_terms or None, trace=trace)
+            recall: dict[str, int] = {}
+            for d in news:
+                q = str((d.get("extra") or {}).get("query") or "")
+                if q:
+                    recall[q] = recall.get(q, 0) + 1
+            self.stats["search_recall"] = recall
+            self.stats["search_terms_version"] = self.search_terms_version or "baseline"
+            self._record_collect(trace)
+            self._log(f"资讯检索：取得 {len(news)} 条（{len(recall)} 路有召回，"
+                      f"过滤 {len(trace.get('rejected') or [])} 条）")
         except Exception as e:
             self.errors.append(f"资讯采集失败：{e}")
             self._log(f"资讯采集失败：{type(e).__name__}", "warn")
@@ -269,11 +295,78 @@ class Pipeline:
             merged.append(d)
         self._tick()
         self.docs = merged
+        self._record_coverage(merged)
         # 第 2 步就把材料清单落库：即便第 3 步抓正文时中断，续跑也不用重新检索
         for d in self.docs:
             store.add_document(d)
         self._save_cp(2)
         self._step(2, "多源采集", "done", f"公告 {len(anns)} · 资讯 {len(news)}")
+
+    def _record_collect(self, trace: dict) -> None:
+        """采集留痕：统计进 runs.stats，被拒条目落到 output/collect/<run_id>.jsonl。
+
+        只记标题、链接与拒因，不存正文。用途是区分“检索词没召回”和“召回了
+        但被主体过滤误杀”——后者现在可以人工复核，前者仍需接口层日志。
+        """
+        queries = trace.get("queries") or []
+        rejected = trace.get("rejected") or []
+        name = f"{self.run_id}.jsonl"
+        try:
+            path = OUT_DIR / "collect" / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("w", encoding="utf-8") as fh:
+                for row in rejected:
+                    fh.write(json.dumps({"run_id": self.run_id, **row},
+                                        ensure_ascii=False) + "\n")
+        except OSError as e:
+            self._log(f"采集留痕写入失败：{type(e).__name__}", "warn")
+            name = ""
+        failed = [q for q in queries if q.get("status") == "error"]
+        empty = [q for q in queries if q.get("status") == "empty"]
+        self.stats["collect"] = {"queries": queries, "rejected": len(rejected),
+                                 "failed": len(failed), "empty": len(empty),
+                                 "log": name}
+        if failed:
+            self._log(f"资讯检索失败 {len(failed)} 路：{failed[0].get('error') or ''}", "warn")
+            if len(failed) == len(queries):
+                # 部分路失败只降级；全部失败说明本轮可能整体缺资讯
+                self.errors.append(f"资讯检索全部失败：{failed[0].get('error') or '原因未知'}")
+
+    def _record_coverage(self, docs: list[dict]) -> None:
+        """公告覆盖对照：公开披露的事项是否在同一轮资讯里出现过。
+
+        公告与媒体资讯不是同一集合，低覆盖不必然是缺陷；这里只产出口清单
+        供人工抽样，不参与门禁，也不影响采集与抽取。
+        """
+        anns = [d for d in docs if d.get("kind") == "announcement"]
+        news = [d for d in docs if d.get("kind") == "news"]
+        if not anns or not news:
+            return
+        report = coverage.announcement_gap(anns, news)
+        name = f"{self.run_id}-gap.jsonl"
+        try:
+            path = OUT_DIR / "collect" / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("w", encoding="utf-8") as fh:
+                for row in report["rows"]:
+                    if row["covered"]:
+                        continue
+                    fh.write(json.dumps({"run_id": self.run_id, **row},
+                                        ensure_ascii=False) + "\n")
+        except OSError as e:
+            self._log(f"覆盖对照写入失败：{type(e).__name__}", "warn")
+            name = ""
+        self.stats["coverage"] = {
+            "announcements": report["announcements"],
+            "covered": report["covered"],
+            "gap": report["gap"],
+            "ratio": report["ratio"],
+            "threshold": report["threshold"],
+            "skipped": report["skipped"],
+            "log": name,
+        }
+        self._log(f"公告覆盖对照：{report['covered']}/{report['announcements']} 条公告"
+                  f"在资讯中出现（{report['ratio']:.0%}）")
 
     # ---- 3. 正文获取 ----
     def _s3_fetch(self) -> None:

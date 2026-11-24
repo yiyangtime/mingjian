@@ -48,15 +48,17 @@ def _f(kind: str, desc: str = "", *, required: bool = False, enum: list | None =
 # ---------------- handlers ----------------
 
 def _entity_resolve(args: dict) -> dict:
-    from .sources import cninfo
+    from ..infra.sources import cninfo
     ent = cninfo.resolve(args["company"])
     return {"found": bool(ent), "entity": ent or {}}
 
 
 def _news_collect(args: dict) -> dict:
-    from .sources import eastmoney
+    from ..infra.sources import eastmoney
+    from . import searchterms
     items = eastmoney.news_bundle(args["company"], args.get("short") or args["company"],
-                                  days=int(args.get("days") or 30))
+                                  days=int(args.get("days") or 30),
+                                  terms=searchterms.active_terms())
     slim = [{"title": it.get("title"), "url": it.get("url"), "source": it.get("source"),
              "published_at": it.get("published_at"), "excerpt": (it.get("body") or "")[:160]}
             for it in items[:20]]
@@ -83,7 +85,7 @@ def _policy_scan(_args: dict) -> dict:
 
 
 def _metric_query(args: dict) -> dict:
-    from .sources import cninfo
+    from ..infra.sources import cninfo
     company = args["company"]
     ent = cninfo.resolve(company) or {"short_name": company, "code": "", "market": ""}
     out = metrics.query(company, ent, args["metric"], int(args.get("periods") or 4))

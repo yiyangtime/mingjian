@@ -49,7 +49,7 @@ class Config:
     max_news: int = 45             # 资讯条数上限
     max_ann: int = 40              # 公告条数上限
     max_fetch: int = 12            # 正文抓取条数上限（控制耗时）
-    news_pages: int = 3            # 东财资讯翻页数
+    news_pages: int = 3            # 东财资讯首路翻页数
 
     # 网络
     timeout: float = 15.0

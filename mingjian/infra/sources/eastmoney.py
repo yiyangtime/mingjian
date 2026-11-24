@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import urllib.parse
 
 from ...config import CFG
@@ -43,8 +44,14 @@ def _strip(s: str) -> str:
     return re.sub(r"<[^>]+>", "", s or "").strip()
 
 
-def search(keyword: str, page: int = 1, size: int = 10) -> list[dict]:
-    """按时间倒序检索资讯。失败返回空列表，不抛异常。"""
+def search(keyword: str, page: int = 1, size: int = 10,
+           meta: dict | None = None) -> list[dict]:
+    """按时间倒序检索资讯。失败返回空列表，不抛异常。
+
+    `meta` 传入空 dict 时写入调用结果：`status`（ok / empty / error）、
+    `error`（失败原因，含 HTTP 状态码）与 `ms`（耗时）。不传时行为不变，
+    供只关心条目的调用方使用。
+    """
     param = {
         "uid": "", "keyword": keyword, "type": ["cmsArticleWebOld"],
         "client": "web", "clientType": "web", "clientVersion": "curr",
@@ -54,13 +61,22 @@ def search(keyword: str, page: int = 1, size: int = 10) -> list[dict]:
         }},
     }
     url = f"{SEARCH_API}?cb=cb&param=" + urllib.parse.quote(json.dumps(param, ensure_ascii=False))
+    stat = {"status": "ok", "error": "", "ms": 0, "raw": 0}
+    started = time.perf_counter()
     try:
         raw = net.fetch(url, headers=_EM_HEADERS).text
         m = re.search(r"cb\((.*)\)\s*$", raw, re.S)
-        data = json.loads(m.group(1)) if m else {}
+        if not m:
+            stat["status"] = "error"
+            stat["error"] = "非 JSONP 响应"
+            return _search_done(meta, stat, started, [])
+        data = json.loads(m.group(1))
         items = ((data.get("result") or {}).get("cmsArticleWebOld")) or []
-    except Exception:
-        return []
+        stat["raw"] = len(items)
+    except Exception as e:
+        stat["status"] = "error"
+        stat["error"] = _err_text(e)
+        return _search_done(meta, stat, started, [])
     out = []
     for it in items:
         title = _strip(it.get("title"))
@@ -76,38 +92,118 @@ def search(keyword: str, page: int = 1, size: int = 10) -> list[dict]:
             "evidence_level": "snippet",
             "extra": {"em_code": it.get("code")},
         })
+    if not out:
+        # 接口正常但确实没有结果；与 error 分开，才能判断“真没资讯”
+        stat["status"] = "empty"
+    return _search_done(meta, stat, started, out)
+
+
+def _search_done(meta, stat: dict, started: float, out: list[dict]) -> list[dict]:
+    stat["ms"] = int((time.perf_counter() - started) * 1000)
+    if meta is not None:
+        meta.update(stat)
     return out
 
 
-def news_bundle(name: str, short: str, days: int = 30) -> list[dict]:
+def _err_text(e: Exception) -> str:
+    """把异常压成一行：优先带 HTTP 状态码，其次是类型与首段原因。"""
+    code = getattr(e, "status", None)
+    name = type(e).__name__
+    if code:
+        return f"{name} {code}"
+    text = str(e) or ""
+    return f"{name}: {text[:80]}" if text else name
+
+
+# 内置检索词基线：第一路公司名负责覆盖，后几路按事件补采。
+# 运行期由上层传入版本化检索词；默认值留在 infra，避免反向依赖 services。
+DEFAULT_TERMS: tuple[str, ...] = ("扩产 产能", "订单 合作 中标", "业绩 财报", "价格 降价")
+
+
+def queries_for(name: str, terms: list[str] | tuple[str, ...] | None = None) -> list[str]:
+    """公司名一路 + 每个检索词一路；空名、空词与重复查询丢弃。"""
+    base = str(name or "").strip()
+    if not base:
+        return []
+    out = [base]
+    for term in (terms or DEFAULT_TERMS):
+        t = " ".join(str(term or "").split())
+        q = f"{base} {t}"
+        if t and q not in out:
+            out.append(q)
+    return out
+
+
+def news_bundle(name: str, short: str, days: int = 30,
+                terms: list[str] | tuple[str, ...] | None = None,
+                trace: dict | None = None) -> list[dict]:
     """
     多路检索合并去重。第一路是公司名（覆盖全部近期资讯），
     后几路按事件类型补采，避免"只搜公司名"漏掉行业政策类信息。
+    `terms` 是版本化的检索词；不传时用内置基线。
+    `trace` 传入空 dict 时写入采集留痕：每路查询的候选 / 入围 / 重复 /
+    不相关条数，以及被丢弃条目的标题与原因。只记元数据，不存正文。
     """
-    queries = [name]
-    for suffix in ("扩产 产能", "订单 合作 中标", "业绩 财报", "价格 降价"):
-        queries.append(f"{name} {suffix}")
+    queries = queries_for(name, terms)
+    if trace is not None:
+        trace["queries"] = []
+        trace["rejected"] = []
 
     seen_title: list[str] = []
     out: list[dict] = []
     for qi, q in enumerate(queries):
+        stat = {"query": q, "raw": 0, "kept": 0, "duplicate": 0, "irrelevant": 0,
+                "status": "ok", "error": "", "ms": 0}
         pages = CFG.news_pages if qi == 0 else 1
         for p in range(1, pages + 1):
-            items = search(q, page=p, size=10)
+            meta: dict = {}
+            items = search(q, page=p, size=10, meta=meta)
+            stat["ms"] += int(meta.get("ms") or 0)
+            if meta.get("status") == "error":
+                stat["status"] = "error"
+                stat["error"] = str(meta.get("error") or "检索失败")
+                break
             if not items:
                 break
             for it in items:
+                stat["raw"] += 1
                 key = re.sub(r"\s+", "", it["title"])
                 if key in seen_title:
+                    stat["duplicate"] += 1
+                    _trace_reject(trace, q, it, "duplicate")
                     continue
                 if not _relevant(it, short, name):
+                    stat["irrelevant"] += 1
+                    _trace_reject(trace, q, it, "irrelevant")
                     continue
                 seen_title.append(key)
+                stat["kept"] += 1
                 it["extra"]["query"] = q
                 out.append(it)
             if len(out) >= CFG.max_news:
-                return out[:CFG.max_news]
+                break
+        if stat["status"] != "error" and stat["raw"] == 0:
+            # 接口正常但一条未返回；与检索失败区分开
+            stat["status"] = "empty"
+        if trace is not None:
+            trace["queries"].append(stat)
+        if len(out) >= CFG.max_news:
+            break
     return out[:CFG.max_news]
+
+
+def _trace_reject(trace, query: str, item: dict, reason: str) -> None:
+    """被丢弃条目的轻量留痕：只有标题、链接与拒因，不含正文。"""
+    if trace is None:
+        return
+    trace["rejected"].append({
+        "query": query,
+        "title": clip(str(item.get("title") or ""), 200),
+        "url": item.get("url") or "",
+        "source": item.get("source") or "",
+        "published_at": item.get("published_at") or "",
+        "reason": reason,
+    })
 
 
 def _relevant(item: dict, short: str, full: str) -> bool:

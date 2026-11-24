@@ -55,6 +55,7 @@ def cmd_run(args) -> int:
         cfg.max_news = args.news
     if args.ann:
         cfg.max_ann = args.ann
+    cfg.news_pages = args.pages
 
     print(f"\n明鉴 · {args.company}（近 {cfg.days} 天）")
     print("=" * 62)
@@ -100,7 +101,7 @@ def cmd_resume(args) -> int:
     except Exception:
         params = {}
     cfg = CFG
-    for k in ("days", "max_news", "max_ann", "max_fetch"):
+    for k in ("days", "max_news", "max_ann", "max_fetch", "news_pages"):
         if params.get(k) is not None:
             try:
                 setattr(cfg, k, int(params[k]))
@@ -323,7 +324,7 @@ def cmd_sched(args) -> int:
             return 1
         params = s.get("params") or {}
         cfg = CFG
-        for k in ("days", "max_news", "max_ann", "max_fetch"):
+        for k in ("days", "max_news", "max_ann", "max_fetch", "news_pages"):
             if params.get(k) is not None:
                 try:
                     setattr(cfg, k, int(params[k]))
@@ -511,7 +512,7 @@ def _print_eval(report: dict) -> None:
 
 def cmd_optimize(args) -> int:
     """离线候选评测、门禁上线、回滚与历史查看。不触网、不启动管道。"""
-    from .services import optimizer
+    from .services import optimizer, searchterms
 
     action = getattr(args, "opt_cmd", "")
     try:
@@ -523,6 +524,106 @@ def cmd_optimize(args) -> int:
                 print("基线错误：")
                 for row in result["errors"][:5]:
                     print(f"  {row['id']} {row['title']}：{row['expected']} → {row['predicted']}")
+            return 0
+        if action == "draft":
+            result = optimizer.draft(args.cases, args.out, version=args.version,
+                                     description=args.description,
+                                     max_per_type=args.max_per_type)
+            print(f"草案：{_rel(result['path'])}｜基线 {result['base_version']}｜"
+                  f"判错 {result['errors']} 条 / 共 {result['cases']} 条")
+            print(f"建议关键词：{result['suggested']}")
+            for row in result["reviewed"]:
+                print(f"  {row['id']} {row['expected']} ← {row['predicted']}：{row['word']}")
+            print("草案不会自动上线；复核后先 eval，再 promote")
+            return 0
+        if action == "harvest":
+            if getattr(args, "kind", "facts") == "docs":
+                result = optimizer.harvest_docs(args.out, limit=args.limit,
+                                                entity_key=args.entity,
+                                                prefix=args.prefix or "D",
+                                                split=args.split, cases_path=args.cases,
+                                                include_covered=args.include_covered)
+                print(f"待标注文档：{_rel(result['path'])}｜{result['count']} 条"
+                      f"（扫描 {result['scanned']} 份文档）")
+                skipped = result["skipped"]
+                print(f"跳过：重复 {skipped['duplicate']}｜无标题 {skipped['no_title']}｜"
+                      f"例行公告 {skipped['routine']}｜正文过短 {skipped['no_body']}｜"
+                      f"无主体 {skipped['no_entity']}")
+                print("expected 填 fact 或 none：只判断“该文档是否应产出事实”，不标事件类型")
+                return 0 if result["count"] else 1
+            result = optimizer.harvest(args.out, limit=args.limit, entity_key=args.entity,
+                                       prefix=args.prefix or "H", split=args.split,
+                                       cases_path=args.cases)
+            print(f"待标注样本：{_rel(result['path'])}｜{result['count']} 条"
+                  f"（扫描 {result['scanned']} 条事实）")
+            skipped = result["skipped"]
+            print(f"跳过：重复 {skipped['duplicate']}｜无标题 {skipped['no_title']}｜"
+                  f"例行公告 {skipped['routine']}")
+            print("expected 已留空：需人工读原文填写；hint.predicted 只是运行期判定，不是标准答案")
+            return 0 if result["count"] else 1
+        if action == "recall":
+            cases = optimizer.load_doc_cases(args.cases)
+            report = optimizer.recall(cases, actor=args.actor)
+            print(f"召回评测：{report['version']}｜样本 {report['cases']} 条"
+                  f"｜准确率 {report['accuracy']:.1%}")
+            print(f"漏检 {len(report['missed'])} 条｜误报 {len(report['false_positive'])} 条")
+            for row in report["missed"][:5]:
+                print(f"  漏检 {row['id']} {row['title']}")
+            for row in report["false_positive"][:5]:
+                print(f"  误报 {row['id']} {row['title']}")
+            if report["skipped"]:
+                print(f"跳过：{len(report['skipped'])} 条（缺少主体名）")
+            print(f"评测文件：{_rel(report['evaluation_file'])}")
+            return 0
+        if action == "collect":
+            data = optimizer.collect_report(args.run_id, limit=args.limit)
+            print(f"运行 {data['run_id']}｜采集留痕：{data['log'] or '（无）'}")
+            for q in data["queries"]:
+                tail = ""
+                if q.get("status") == "error":
+                    tail = f"｜失败 {q.get('error') or ''}"
+                elif q.get("status") == "empty":
+                    tail = "｜无结果"
+                print(f"  {q['query']}：{q.get('ms', 0)}ms｜候选 {q['raw']}"
+                      f"｜入围 {q['kept']}｜重复 {q['duplicate']}"
+                      f"｜不相关 {q['irrelevant']}{tail}")
+            if not data["queries"]:
+                print("  （没有统计：旧版本运行，或当次资讯采集失败）")
+            if data["queries"]:
+                print(f"检索失败 {data.get('failed', 0)} 路｜无结果 {data.get('empty', 0)} 路")
+            cov = data.get("coverage") or {}
+            if cov:
+                print(f"公告覆盖：{cov.get('covered', 0)}/{cov.get('announcements', 0)} 条在资讯中出现"
+                      f"（{cov.get('ratio', 0):.0%}）｜缺口 {cov.get('gap', 0)} 条"
+                      f"｜{data.get('gap_log') or '（无）'}")
+                for row in data.get("gap_rows") or []:
+                    print(f"  [{row.get('score', 0):.2f}] {row.get('title', '')}")
+            print(f"被拒条目 {data['rejected']} 条，显示前 {len(data['rows'])} 条：")
+            for row in data["rows"]:
+                print(f"  [{row.get('reason', '')}] {row.get('title', '')}"
+                      f"｜{row.get('query', '')}")
+            if data["rejected"] and not data["rows"]:
+                print("  （留痕文件缺失：统计还在，明细可能被手动清理）")
+            return 0
+        if action == "depth":
+            report = optimizer.depth_report(args.base, args.cand)
+            b, c = report["base"], report["cand"]
+            print(f"深度对照：{b['run_id']} → {c['run_id']}｜{b['company']}"
+                  f"｜页数 {b['pages']} → {c['pages']}")
+            print(f"候选 {b['candidates']} → {c['candidates']}"
+                  f"（{report['candidates']['delta']:+d}）"
+                  f"｜入围 {b['kept']} → {c['kept']}"
+                  f"（{report['kept']['delta']:+d}）")
+            print(f"文档 {b['docs']} → {c['docs']}｜新增 {report['docs']['new']}"
+                  f"（带事实 {report['new_docs_with_fact']}）"
+                  f"｜重叠 {report['docs']['overlap']}")
+            print(f"检索耗时 {b['ms']}ms → {c['ms']}ms")
+            for row in report["per_query"]:
+                print(f"  {row['query']}：候选 {row['base_raw']}→{row['cand_raw']}"
+                      f"｜入围 {row['base_kept']}→{row['cand_kept']}")
+            if report["terms_changed"]:
+                print("检索词版本不同：只能看边际，不能当同词对照")
+            print(f"报告：{_rel(report['report_file'])}")
             return 0
         if action == "eval":
             report = optimizer.evaluate_file(args.candidate, args.cases, actor=args.actor)
@@ -544,6 +645,8 @@ def cmd_optimize(args) -> int:
             if active.get("promoted_at"):
                 print(f"上线时间：{active['promoted_at']}｜操作人：{active.get('actor') or '-'}")
             print(f"已归档版本：{data['versions']} 个")
+            terms = searchterms.load()
+            print(f"检索词：{terms['version']}｜{len(terms['terms'])} 路（未纳入门禁）")
             if data["evaluations"]:
                 print(f"最近评测：{data['evaluations'][0]}")
             return 0
@@ -560,7 +663,7 @@ def cmd_optimize(args) -> int:
             for name in data["evaluations"][:args.limit]:
                 print(f"  {name}")
             return 0
-        print("请指定 optimize 子命令：baseline / eval / promote / rollback / status / history")
+        print("请指定 optimize 子命令：baseline / draft / harvest / recall / collect / depth / eval / promote / rollback / status / history")
         return 1
     except (ValueError, FileExistsError, OSError) as e:
         print(f"失败：{e}")
@@ -576,6 +679,7 @@ def main(argv=None) -> int:
     r.add_argument("--days", type=int, default=CFG.days, help="回溯天数")
     r.add_argument("--fetch", type=int, default=CFG.max_fetch, help="正文抓取条数上限")
     r.add_argument("--news", type=int, default=CFG.max_news, help="资讯条数上限")
+    r.add_argument("--pages", type=int, default=CFG.news_pages, help="资讯首路翻页数（加深对照用）")
     r.add_argument("--ann", type=int, default=CFG.max_ann, help="公告条数上限")
     r.add_argument("--print-all", action="store_true", help="打印完整报告")
     r.set_defaults(func=cmd_run)
@@ -674,6 +778,43 @@ def main(argv=None) -> int:
     oe.add_argument("--cases", default=cases_default, help="评测集（JSON 或 JSONL）")
     oe.add_argument("--actor", default="cli", help="操作人（写入审计）")
     oe.set_defaults(func=cmd_optimize)
+
+    od = osub.add_parser("draft", help="从评测集判错样本生成候选草案，不上线")
+    od.add_argument("--cases", default=cases_default, help="评测集（JSON 或 JSONL）")
+    od.add_argument("--out", default=str(ROOT / "tools" / "optimizer"), help="草案输出目录")
+    od.add_argument("--version", default="", help="草案版本号，默认按时间生成")
+    od.add_argument("--description", default="", help="草案说明")
+    od.add_argument("--max-per-type", type=int, default=6, help="每个事件类型最多抽取几个词")
+    od.set_defaults(func=cmd_optimize)
+
+    ohv = osub.add_parser("harvest", help="把运行事实或文档导出成待标注样本，不自动标注")
+    ohv.add_argument("--out", default=str(ROOT / "tools" / "optimizer"), help="输出目录")
+    ohv.add_argument("--cases", default=cases_default, help="已有评测集，用于去重")
+    ohv.add_argument("--kind", default="facts", choices=("facts", "docs"),
+                     help="facts=分类样本；docs=文档级召回样本")
+    ohv.add_argument("--limit", type=int, default=200, help="最多扫描多少条事实或文档")
+    ohv.add_argument("--entity", default="", help="只导出某个实体 key 的样本")
+    ohv.add_argument("--prefix", default="", help="样本编号前缀（默认 H / D）")
+    ohv.add_argument("--split", default="dev", choices=("dev", "holdout"), help="归入开发集还是保留集")
+    ohv.add_argument("--include-covered", action="store_true",
+                     help="仅 kind=docs：连已产出事实的文档一起导出")
+    ohv.set_defaults(func=cmd_optimize)
+
+    orc = osub.add_parser("recall", help="文档级召回评测：只判是否产出事实，不设门禁")
+    orc.add_argument("--cases", default=str(ROOT / "tools" / "optimizer" / "doc_cases.jsonl"),
+                     help="文档级召回评测集（JSON 或 JSONL）")
+    orc.add_argument("--actor", default="cli", help="操作人（写入审计）")
+    orc.set_defaults(func=cmd_optimize)
+
+    occ = osub.add_parser("collect", help="查看某次运行的采集留痕：每路召回与被拒条目")
+    occ.add_argument("run_id", help="运行编号，如 R20261118103000-1234")
+    occ.add_argument("--limit", type=int, default=20, help="最多显示多少条被拒条目")
+    occ.set_defaults(func=cmd_optimize)
+
+    odp = osub.add_parser("depth", help="对照两次运行的检索深度：新增候选、文档与覆盖")
+    odp.add_argument("base", help="浅检索运行编号")
+    odp.add_argument("cand", help="深检索运行编号")
+    odp.set_defaults(func=cmd_optimize)
 
     op = osub.add_parser("promote", help="重新评测，门禁通过后写入版本库并切换上线")
     op.add_argument("--candidate", required=True, help="候选 JSON")

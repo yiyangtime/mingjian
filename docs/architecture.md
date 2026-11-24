@@ -42,7 +42,7 @@ mingjian/                    后端包
 │   ├── scheduler.py         每天 / 每周表达式
 │   └── sources/
 │       ├── cninfo.py        巨潮：实体解析、公告列表与 PDF
-│       └── eastmoney.py     东财：公司档案、主营构成、指标、资讯
+│       └── eastmoney.py     东财：公司档案、主营构成、指标、资讯（检索词可传入）
 ├── services/
 │   ├── extract.py           事件分类、金额日期抽取、置信度、跨源合并
 │   ├── diff.py              与上一份快照比对
@@ -54,7 +54,9 @@ mingjian/                    后端包
 │   ├── subject.py           非上市主体自述档案
 │   ├── discover.py          品类词反查候选竞品
 │   ├── memory.py            跨运行记忆
-│   ├── optimizer.py         离线候选评测、门禁、上线与回滚
+│   ├── optimizer.py         离线候选评测、待标注采集、召回评测、深度对照、门禁与回滚
+│   ├── searchterms.py       检索词版本：文件校验与基线回退
+│   ├── coverage.py          公告覆盖对照：披露事项与资讯的代理匹配
 │   └── skills.py            技能注册表
 ├── runtime/
 │   ├── pipeline.py          七步编排 + 事件流 + 检查点
@@ -83,7 +85,7 @@ web/                         前端工程
   → runtime/jobs.py 入队，线程池执行
   → runtime/pipeline.py 七步：
       1 实体解析   infra/sources/cninfo.py + eastmoney.py → entities 表
-      2 多源采集   公告列表 + 资讯检索 → 检查点 1
+      2 多源采集   公告列表 + 资讯检索（检索词版本固定、逐路召回与被拒条目留痕） → 检查点 1
       3 正文解析   PDF 文本层 / HTML 正文 → 检查点 2（按文档记录 evidence_level）
       4 事实抽取   services/extract.py → 检查点 3（confidence 计算与合并）
      （第 4 步结束存检查点 4）
@@ -127,6 +129,29 @@ SQL。表结构在 `infra/schema.py` 里定义一份，可渲染成三种方言�
 保证历史运行和续跑不被后续上线串味。候选只允许增量关键词，不能执行代码；
 详见 [optimizer.md](optimizer.md)。
 
+资讯检索词走单独的轻量版本：内置基线在 `infra/sources/eastmoney.py`，可选的
+`data/optimizer/search_terms.json` 按整份覆盖（非法则回退基线）。运行起点固定版本，
+每路召回条数写入 `runs.stats.search_recall`；因为还没有带标注的召回语料，检索词
+不入门禁，也没有 promote。
+
+采集过滤同时留痕：每路的候选 / 入围 / 重复 / 不相关条数，以及成功 / 空结果 / 失败
+状态与耗时写入 `runs.stats.collect`；失败路不计入召回，全部失败记入运行错误。
+被丢弃条目的标题、链接与拒因落在 `output/collect/<run_id>.jsonl`（不存正文），
+`optimize collect <run_id>` 可回看。它只能区分“召回了但被过滤误杀”与“检索失败”，
+接口正常却没召回的仍不可见。
+
+采集完成后还做一次公告覆盖对照：逐条公告找最相近的资讯，按公告核心词被覆盖的
+比例打分，缺口清单写入 `output/collect/<run_id>-gap.jsonl`。公告与媒体资讯不是
+同一集合，小公告无人报道很正常，因此覆盖比例只供人工抽样，不设门禁。
+
+同一公司的两次运行可用 `optimize depth <浅> <深>` 对照候选 / 入围 / 文档 / 事实
+增量；它只读运行记录与文档，不联网。两次运行的时间窗不同，增量只能作观察，
+不是严格对照，也不据此自动改页数或检索词。
+
+文档级召回评测用 `optimize harvest --kind docs` 导出未产出事实的文档，人工标
+`expected`（fact / none），`optimize recall` 离线回放并比对漏检与误报。它只覆盖
+已入库文档，被拒候选虽有留痕但无正文、不能自动回放，因此不设门禁。
+
 ## 五、并发模型
 
 - 单进程多线程：uvicorn 同步路由跑在线程池，作业队列、取消信号、调度线程都在进程内存里。
@@ -138,7 +163,8 @@ SQL。表结构在 `infra/schema.py` 里定义一份，可渲染成三种方言�
 | 你要做的事 | 落点 | 注意 |
 |---|---|---|
 | 加接口 | `api/routes/<领域>.py` + `routes/__init__.py` 登记 | 路由路径唯一、按领域打 tag |
-| 改判定规则 | `services/` | 必须同时加断言到 `tools/selftest_all.py`；分类词表候选走 `optimizer` 门禁 |
+| 改判定规则 | `services/` | 必须同时加断言到 `tools/selftest_all.py`；分类词表候选走 `optimizer` 的 draft / eval / promote 门禁 |
+| 改检索词 | `data/optimizer/search_terms.json` | 2—8 路、每路不超过 40 字；整份覆盖，非法回退基线；逐路召回与被拒条目留痕；尚未纳入门禁 |
 | 接新数据源 | `infra/sources/<源>.py` | 只做取数与归一化，不写业务判断；失败要可降级 |
 | 加报告节 | `services/report.py` | 同步 `docs/methodology.md` 与前端渲染 |
 | 加页面 | `web/src/features/<域>/` | 路由表登记；视图行数预算只降不升 |

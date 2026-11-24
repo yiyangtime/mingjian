@@ -49,6 +49,12 @@ python -m mingjian serve                      # 打开 http://127.0.0.1:8765
 ```bash
 python -m mingjian run 某某企业          # 跑一次，报告落 output/
 python -m mingjian run 某某企业 --days 60  # 自定义回溯窗口
+python -m mingjian optimize harvest    # 运行事实导出待标注评测样本
+python -m mingjian optimize harvest --kind docs  # 未产出事实的文档导出为召回样本
+python -m mingjian optimize recall     # 文档级召回评测：漏检 / 误报对照
+python -m mingjian optimize collect R20261118103000-1234  # 回看某次采集的每路召回与被拒条目
+python -m mingjian optimize depth R20261118103000-1234 R20261119103000-5678  # 对照加深前后的增量
+python -m mingjian optimize draft      # 从评测集判错样本生成候选草案
 python -m mingjian optimize eval --candidate tools/optimizer/candidate.example.json  # 离线评测候选
 ```
 
@@ -87,7 +93,7 @@ mingjian serve
 | 步骤 | 实际动作 |
 |---|---|
 | 1 实体解析 | 公司名 → 实体档案（orgId、全称、行业、主营、注册地） |
-| 2 多源采集 | 近 30 天公告 + 按事件词检索资讯，按主体相关度过滤 |
+| 2 多源采集 | 近 30 天公告 + 按检索词检索资讯，按主体相关度过滤，记录每路状态 |
 | 3 正文解析 | 公告 PDF 还原中文、资讯正文抽取，记录证据等级 |
 | 4 事实抽取 | 事件分类、金额日期抽取、证据句定位、置信度、跨源合并 |
 | 5 变化比对 | 与同一公司上一份快照比较：新增 / 升温 / 本轮未见 |
@@ -99,6 +105,15 @@ mingjian serve
 
 事件分类词表另有一套离线优化闭环：候选只允许增量关键词，先在冻结评测集上
 做基线对照，通过门禁后才切换生效版本；历史运行按原版本留痕，可一键回滚。
+评测集可用 `optimize harvest` 从运行事实导出待标注样本，标准答案仍只能人工填写。
+文档级召回集用 `optimize harvest --kind docs` 导出未产出事实的文档，
+`optimize recall` 只输出漏检 / 误报对照，不设门禁。
+资讯检索词也支持版本固定：`data/optimizer/search_terms.json` 整份覆盖内置基线，
+每路召回条数落运行统计；被判重复或不相关的候选也留痕（标题 / 链接 / 拒因，不含
+正文），每路状态（成功 / 空结果 / 失败）也落统计，可用 `optimize collect` 回看；
+采集完成后还会做一次公告覆盖对照，缺口清单写入 `output/collect/<run_id>-gap.jsonl`，
+同样只供抽样；同一公司的两次运行可用 `optimize depth <浅> <深>` 对照候选、文档与
+事实增量，但新闻流随时间变化，只能作观察。检索词与留痕暂不参与门禁。
 命令与门禁说明见 [docs/optimizer.md](docs/optimizer.md)。
 
 ## 报告结构
@@ -120,7 +135,8 @@ api → runtime → services → infra → core
 
 - `core`：日志、HTTP、文本、PDF、上下文预算
 - `infra`：数据库（SQLite / PostgreSQL / MySQL）、巨潮 / 东财、模型服务、调度、离线版本存储
-- `services`：抽取、分类、归因、成稿、政策解析、离线候选评测（不感知 HTTP）
+- `services`：抽取、分类、归因、成稿、政策解析、检索词版本、离线候选评测、召回评测、
+  采集留痕、公告覆盖与深度对照（不感知 HTTP）
 - `runtime`：七步管道、竞品对比、作业队列与断点
 - `api`：九个领域路由、统一错误形状、SPA 托管
 
@@ -152,7 +168,7 @@ api → runtime → services → infra → core
 ```bash
 pip install -e ".[dev]"
 ruff check .
-python tools/selftest_all.py        # 38 项断言：抽取 / 归因 / 矩阵 / 政策 / 调度 / 落库 / 方言 / 离线优化
+python tools/selftest_all.py        # 43 项断言：抽取 / 归因 / 矩阵 / 政策 / 调度 / 落库 / 方言 / 离线优化
 python tools/selftest_arch.py       # 分层边界、路由唯一性、前端隔离、视图体积棘轮
 python -m mingjian db --counts      # 当前数据库、版本与各表行数
 cd web && npm ci && npm run build   # vue-tsc 类型检查 + 构建
@@ -190,8 +206,17 @@ Node 20 上跑同样的门禁，并做一次服务冒烟。
 - **服务必须单进程运行**：作业状态与调度线程在进程内存里，不要用 `--workers N`。
 - **定时任务依赖服务常驻**，停机期间错过的时点不补跑。
 - **智能体是受控工作流**：技能按白名单执行，模型不选工具、不规划；记忆检索是字面词匹配。
-- **离线优化目前只覆盖事件分类词表**：候选必须人工或外部工具生成，先过离线评测与门禁；
-  其他规则、提示词和报告模板尚未纳入自动门禁。
+- **离线优化目前只覆盖事件分类词表**：候选可由 `optimize draft` 从判错样本抽词生成，
+  也可人工编写；都要先过离线评测与门禁，草案不会自动上线；
+  检索词可版本化并记录每路召回，但暂不参与门禁；其他规则、提示词和报告模板尚未覆盖。
+- **召回评测只覆盖已入库文档**：采集留痕虽有被拒条目，但只有标题与链接、没有正文，
+  不能离线重跑相关性过滤，也还不能自动生成评测集；检索失败与空结果已分开留痕，
+  但接口正常却没召回的仍不可见。
+  文档级召回集仍需人工标注 `expected`（fact / none），也只能反映已采到的材料。
+- **公告覆盖是代理指标**：公告有、资讯无是常态，覆盖比例低不等于漏采；缺口清单
+  只用于人工抽样，不参与门禁。
+- **深度对照不是严格对照**：两次运行的时间窗与新闻流不同，候选增量可能来自新资讯
+  而非翻页加深，只能看边际，不能当因果；`--pages` 也只加深首路公司名查询。
 
 ## 项目结构
 
