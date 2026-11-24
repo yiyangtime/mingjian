@@ -1,0 +1,31 @@
+明鉴 MingJian · 产业情报
+Copyright 2026 MingJian Contributors
+
+This product includes software developed as part of the MingJian project
+and distributed under the Apache License, Version 2.0.
+
+本产品包含或依赖以下第三方开源组件，其版权与许可归各自作者所有，
+完整许可文本以安装环境中的包元数据为准：
+
+  FastAPI                MIT License
+  Starlette              BSD 3-Clause License
+  Pydantic               MIT License
+  pydantic-core          MIT License
+  typing-extensions      PSF License
+  annotated-types        MIT License
+  anyio                  MIT License
+  sniffio                MIT License
+  idna                   BSD 3-Clause License
+  uvicorn                BSD 3-Clause License
+  click                  BSD 3-Clause License
+  h11                    MIT License
+  Vue 3                  MIT License
+  Vue Router             MIT License
+  Vite                   MIT License
+  TypeScript             Apache License 2.0
+  vue-tsc                MIT License
+  @vitejs/plugin-vue     MIT License
+
+第三方数据来源（巨潮资讯、东方财富、各级工业和信息化主管部门官网）
+的内容版权归原发布方所有。本项目只做公开信息的检索、解析与引用，
+不主张对原文内容的任何权利，详见 DISCLAIMER.md。

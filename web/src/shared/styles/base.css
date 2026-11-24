@@ -1,0 +1,195 @@
+/* 设计令牌与全站公共样式。页面内的细粒度排版留在各视图的 scoped style 里。 */
+:root {
+  --bg: #F4F6FA;
+  --card: #FFFFFF;
+  --ink: #17202E;
+  --sub: #4E5A6B;
+  --mute: #7E8A9C;
+  --line: #E5E9F0;
+  --line-strong: #D6DCE6;
+  --accent: #1F66D0;
+  --accent-hover: #1857B5;
+  --accent-soft: #EEF4FF;
+  --accent-line: #C9DCF8;
+  --ok: #0B7A57;
+  --ok-soft: #E8F6F0;
+  --warn: #A85B07;
+  --warn-soft: #FFF5E6;
+  --err: #B42318;
+  --err-soft: #FDEEEC;
+  --radius: 14px;
+  --radius-sm: 10px;
+  --shadow-card: 0 1px 2px rgba(20, 29, 45, .04), 0 3px 10px rgba(20, 29, 45, .03);
+  --shadow-pop: 0 18px 44px rgba(20, 29, 45, .14), 0 2px 8px rgba(20, 29, 45, .06);
+  --mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+html, body { margin: 0; min-height: 100%; }
+body {
+  background:
+    radial-gradient(1200px 600px at 10% -12%, rgba(31, 102, 208, .055), transparent 60%),
+    radial-gradient(1000px 520px at 100% 0%, rgba(11, 122, 87, .035), transparent 55%),
+    var(--bg);
+  color: var(--ink);
+  font: 14px/1.62 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  letter-spacing: .01em;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+a { color: var(--accent); }
+a:hover { color: var(--accent-hover); }
+input, select, textarea, button { font-family: inherit; }
+::selection { background: rgba(31, 102, 208, .18); }
+.hidden { display: none !important; }
+
+/* 键盘操作时给一个清楚的焦点环，鼠标点击不出现 */
+:focus-visible { outline: 2px solid rgba(31, 102, 208, .45); outline-offset: 2px; }
+input:focus-visible, select:focus-visible, textarea:focus-visible { outline: none; }
+
+/* 表单控件：各页面只需要覆盖尺寸，不用重复描边与焦点态 */
+input[type="text"], input[type="search"], input[type="number"],
+input[type="password"], input[type="time"], input[type="date"], select, textarea {
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 13.5px;
+  transition: border-color .15s, box-shadow .15s, background .15s;
+}
+input[type="text"]:hover, input[type="search"]:hover, input[type="number"]:hover,
+input[type="password"]:hover, input[type="time"]:hover, select:hover, textarea:hover {
+  border-color: #C3CBD8;
+}
+input[type="text"]:focus, input[type="search"]:focus, input[type="number"]:focus,
+input[type="password"]:focus, input[type="time"]:focus, select:focus, textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(31, 102, 208, .12);
+  outline: none;
+}
+::placeholder { color: #9AA5B5; }
+select { cursor: pointer; }
+textarea { line-height: 1.7; }
+
+/* 细滚动条，避免长表格和日志窗出现粗黑条 */
+* { scrollbar-width: thin; scrollbar-color: #C9D1DD transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb { background: #CDD5E0; border: 3px solid transparent; border-radius: 999px; background-clip: content-box; }
+*::-webkit-scrollbar-thumb:hover { background: #B4BFCD; border: 3px solid transparent; background-clip: content-box; }
+*::-webkit-scrollbar-track { background: transparent; }
+
+/* 运行状态徽标：全站统一颜色与叫法 */
+.run-st {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; font-weight: 550; padding: 3px 9px; border-radius: 999px; white-space: nowrap;
+  background: #F1F4F8; color: var(--sub);
+}
+.run-st::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.run-st.ok { background: var(--ok-soft); color: var(--ok); }
+.run-st.run { background: var(--accent-soft); color: var(--accent); }
+.run-st.queue { background: #F1F3F6; color: var(--sub); }
+.run-st.err { background: var(--err-soft); color: var(--err); }
+.run-st.warn { background: var(--warn-soft); color: var(--warn); }
+
+/* 按钮：默认无描边，ghost 才显示边界；高度三档统一 */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 36px; padding: 0 16px; border: 1px solid transparent; border-radius: 10px;
+  font-size: 13.5px; font-weight: 550; line-height: 1; white-space: nowrap;
+  cursor: pointer; text-decoration: none; color: var(--ink); background: #fff;
+  box-shadow: 0 1px 1px rgba(20, 29, 45, .03);
+  transition: background .15s, border-color .15s, color .15s, box-shadow .15s, transform .06s;
+}
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn:disabled, .btn.disabled { opacity: .48; cursor: not-allowed; pointer-events: none; }
+.btn-primary {
+  background: linear-gradient(180deg, #2B72DB, var(--accent));
+  border-color: var(--accent);
+  color: #fff;
+  box-shadow: 0 1px 2px rgba(31, 102, 208, .28), inset 0 1px 0 rgba(255, 255, 255, .16);
+}
+.btn-primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, #2569D1, var(--accent-hover));
+  border-color: var(--accent-hover);
+}
+.btn-ghost { background: #fff; border-color: var(--line-strong); color: #344054; box-shadow: none; }
+.btn-ghost:hover:not(:disabled) { border-color: #BFC8D6; background: #F9FAFC; }
+.btn-danger { background: var(--err); border-color: var(--err); color: #fff; }
+.btn-danger:hover:not(:disabled) { background: #961B12; border-color: #961B12; }
+.btn-sm { height: 30px; padding: 0 12px; font-size: 12.5px; border-radius: 8px; }
+.btn-xs { height: 26px; padding: 0 9px; font-size: 11.5px; border-radius: 7px; }
+.btn-lg { height: 44px; padding: 0 22px; font-size: 14.5px; border-radius: 11px; }
+
+/* 卡片 */
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+}
+.card-h {
+  padding: 16px 20px; border-bottom: 1px solid var(--line);
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.card-h h3 { margin: 0; font-size: 14.5px; font-weight: 650; letter-spacing: .01em; }
+.card-h .hint { font-size: 12px; color: var(--mute); font-weight: 400; }
+.spacer { flex: 1; }
+.empty { padding: 34px 20px; text-align: center; color: var(--mute); font-size: 13px; }
+
+/* 深色日志窗 */
+.logs {
+  background: #141B27; color: #C8D2E0; border-radius: 12px;
+  padding: 14px 16px; overflow: auto;
+  font: 12px/1.85 var(--mono);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04);
+}
+.logs div { white-space: pre-wrap; word-break: break-word; }
+.logs .w { color: #F3C969; }
+.logs .e { color: #FF9B91; }
+.logs .o { color: #6EE7B7; }
+.logs .t { color: #64748B; margin-right: 8px; }
+
+/* 报告正文（v-html 渲染，不能用 scoped 选择器） */
+.md { font-size: 14px; line-height: 1.92; color: #2A3038; }
+.md h1 { font-size: 24px; line-height: 1.35; margin: 0 0 12px; letter-spacing: -.2px; }
+.md h2 { font-size: 18px; line-height: 1.45; margin: 30px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.md h3 { font-size: 14.5px; margin: 22px 0 8px; color: var(--accent); }
+.md p { margin: 9px 0; }
+.md blockquote {
+  margin: 12px 0; padding: 12px 16px; background: #F7F9FC;
+  border-left: 3px solid var(--accent-line); color: var(--sub); font-size: 13px;
+  border-radius: 0 8px 8px 0;
+}
+.md ul, .md ol { margin: 9px 0; padding-left: 24px; }
+.md li { margin: 6px 0; }
+.md table { margin: 14px 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.md th { background: #F8FAFC; }
+.md th, .md td { text-align: left; padding: 10px 13px; border-bottom: 1px solid #EFF2F6; font-size: 13px; }
+.md code { background: #F1F4F8; padding: 2px 6px; border-radius: 5px; font-size: 12.5px; font-family: var(--mono); }
+.md a { color: var(--accent); text-decoration: none; }
+.md a:hover { text-decoration: underline; }
+.md hr { border: 0; border-top: 1px solid var(--line); margin: 22px 0; }
+
+/* 加载转圈 */
+.spin {
+  display: inline-block; width: 13px; height: 13px; border: 2px solid rgba(255, 255, 255, .35);
+  border-top-color: #fff; border-radius: 50%; animation: sp .8s linear infinite;
+  vertical-align: -2px; margin-right: 6px;
+}
+@keyframes sp { to { transform: rotate(360deg); } }
+
+.pill { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #F1F4F8; color: var(--sub); white-space: nowrap; }
+.conf { font-family: var(--mono); font-size: 12px; }
+.conf.hi { color: var(--ok); }
+.conf.mid { color: var(--warn); }
+.conf.lo { color: var(--mute); }
+.src { font-size: 11.5px; color: var(--mute); max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 720px) {
+  body { font-size: 13.5px; }
+  .card-h { padding: 14px 16px; }
+  .btn { height: 34px; padding: 0 13px; font-size: 13px; }
+  .btn-sm { height: 29px; padding: 0 10px; }
+}

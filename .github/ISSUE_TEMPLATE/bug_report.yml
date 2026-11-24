@@ -1,0 +1,60 @@
+name: Bug 报告
+description: 报告可复现的问题
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提交前请确认：已搜索现有 issue、已阅读 `DISCLAIMER.md`。
+        **不要在 issue 里贴真实公司数据、数据库文件、日志原文或任何密钥。**
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么
+      description: 期望行为与实际行为
+      placeholder: 点「开始分析」后进度停在 3/7，日志显示 PDF 解析失败……
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. python -m mingjian serve
+        2. 输入「某某科技」
+        3. 观察第 3 步
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 版本 / 提交
+      placeholder: v1.0.0 或 commit sha
+    validations:
+      required: true
+  - type: dropdown
+    id: env
+    attributes:
+      label: 运行环境
+      options:
+        - Windows
+        - Linux
+        - macOS
+        - Docker
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志（已脱敏）
+      description: 请删除公司名、URL 参数与密钥后再粘贴
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 自查
+      options:
+        - label: 已确认不是上游数据源不可用导致的（政策页会提示站点不可达）
+        - label: 已确认端口没有被旧进程占用
+        - label: 内容已脱敏，不含真实公司数据与密钥

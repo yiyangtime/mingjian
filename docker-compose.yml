@@ -1,0 +1,20 @@
+services:
+  mingjian:
+    build: .
+    image: mingjian:1.0.0
+    container_name: mingjian
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./data:/app/data
+      - ./output:/app/output
+      - ./logs:/app/logs
+      # 需要批量解析政策文件时，把本机材料目录挂进来（只读）
+      # - ./materials:/app/materials:ro
+    environment:
+      # 不配模型也能运行；需要时在 .env 中填写后由 compose 注入
+      MINGJIAN_LLM_BASE: ${MINGJIAN_LLM_BASE:-}
+      MINGJIAN_LLM_KEY: ${MINGJIAN_LLM_KEY:-}
+      MINGJIAN_LLM_MODEL: ${MINGJIAN_LLM_MODEL:-}
+      MINGJIAN_DAYS: ${MINGJIAN_DAYS:-30}
+    restart: unless-stopped

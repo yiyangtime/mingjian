@@ -1,0 +1,17 @@
+{
+  "days": 30,
+  "max_companies": 6,
+  "max_news": 45,
+  "max_ann": 40,
+  "max_fetch": 12,
+  "news_pages": 3,
+  "timeout": 15.0,
+  "retries": 2,
+  "host_interval": 0.45,
+  "min_fact_conf": 0.45,
+  "max_facts": 30,
+  "llm_base": "",
+  "llm_key": "",
+  "llm_model": "",
+  "llm_timeout": 90.0
+}
