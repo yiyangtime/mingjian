@@ -8,6 +8,7 @@
     python -m mingjian show R20261118...
     python -m mingjian sched --company 某某科技 --daily --time 09:00
     python -m mingjian db --counts
+    python -m mingjian optimize eval --candidate 候选.json
     python -m mingjian serve --port 8765
 
 输出同时落盘到 output/，报告可直接发给业务方。
@@ -16,10 +17,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import pathlib
 import sys
 import time
 
-from .config import CFG, OUT_DIR
+from .config import CFG, OUT_DIR, ROOT
 from .infra import db as dbmod
 from .infra import llmcfg, store
 from .runtime import pipeline
@@ -480,6 +482,91 @@ def cmd_peers(args) -> int:
     return 0
 
 
+def _rel(path) -> str:
+    try:
+        return str(pathlib.Path(path).resolve().relative_to(ROOT.resolve()))
+    except (OSError, ValueError):
+        return str(path)
+
+
+def _print_metrics(title: str, base: dict, cand: dict) -> None:
+    print(f"{title}：基线准确率 {base['accuracy']:.1%} → 候选 {cand['accuracy']:.1%}；"
+          f"宏 F1 {base['macro_f1']:.3f} → {cand['macro_f1']:.3f}")
+
+
+def _print_eval(report: dict) -> None:
+    _print_metrics("离线评测", report["baseline"]["metrics"], report["candidate_metrics"])
+    print(f"候选：{report['candidate']['version']}｜新增关键词：{report['candidate']['added']}")
+    for check in report["gate"]["checks"]:
+        flag = "通过" if check["ok"] else "未通过"
+        print(f"  [{flag}] {check['name']}：{check['detail']}")
+    print(f"门禁：{'通过' if report['gate']['passed'] else '未通过'}")
+    if report.get("errors", {}).get("new"):
+        print("新增错误：")
+        for row in report["errors"]["new"][:5]:
+            print(f"  {row['id']} {row['title']}：{row['expected']} → {row['predicted']}")
+    if report.get("evaluation_file"):
+        print(f"评测文件：{_rel(report['evaluation_file'])}")
+
+
+def cmd_optimize(args) -> int:
+    """离线候选评测、门禁上线、回滚与历史查看。不触网、不启动管道。"""
+    from .services import optimizer
+
+    action = getattr(args, "opt_cmd", "")
+    try:
+        if action == "baseline":
+            result = optimizer.evaluate_cases(args.cases)
+            print(f"基线版本：{result['version']}｜样本 {result['case_count']} 条")
+            print(f"准确率 {result['metrics']['accuracy']:.1%}｜宏 F1 {result['metrics']['macro_f1']:.3f}")
+            if result["errors"]:
+                print("基线错误：")
+                for row in result["errors"][:5]:
+                    print(f"  {row['id']} {row['title']}：{row['expected']} → {row['predicted']}")
+            return 0
+        if action == "eval":
+            report = optimizer.evaluate_file(args.candidate, args.cases, actor=args.actor)
+            _print_eval(report)
+            return 0 if report["gate"]["passed"] else 1
+        if action == "promote":
+            result = optimizer.promote(args.candidate, args.cases, actor=args.actor)
+            _print_eval(result["report"])
+            print(f"已上线：{result['version']}（原版本 {result['base_version']}）")
+            return 0
+        if action == "rollback":
+            result = optimizer.rollback(args.version, actor=args.actor)
+            print(f"已回滚：{result['from_version']} → {result['version']}")
+            return 0
+        if action == "status":
+            data = optimizer.status(limit=args.limit)
+            active = data["active"]
+            print(f"当前生效：{active['version']}｜规则 {active['rules']} 类 / {active['keywords']} 词")
+            if active.get("promoted_at"):
+                print(f"上线时间：{active['promoted_at']}｜操作人：{active.get('actor') or '-'}")
+            print(f"已归档版本：{data['versions']} 个")
+            if data["evaluations"]:
+                print(f"最近评测：{data['evaluations'][0]}")
+            return 0
+        if action == "history":
+            data = optimizer.history(limit=args.limit)
+            print("已归档版本：")
+            if not data["versions"]:
+                print("  （无）")
+            for row in data["versions"]:
+                print(f"  {row['version']} ← {row.get('base_version') or '-'}｜{row.get('promoted_at') or '-'}｜{row.get('actor') or '-'}")
+            print("最近评测：")
+            if not data["evaluations"]:
+                print("  （无）")
+            for name in data["evaluations"][:args.limit]:
+                print(f"  {name}")
+            return 0
+        print("请指定 optimize 子命令：baseline / eval / promote / rollback / status / history")
+        return 1
+    except (ValueError, FileExistsError, OSError) as e:
+        print(f"失败：{e}")
+        return 1
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="mingjian", description="明鉴：输入公司名，自动完成采集、抽取、比对与成稿")
     sub = p.add_subparsers(dest="cmd")
@@ -574,6 +661,41 @@ def main(argv=None) -> int:
     d.add_argument("--counts", action="store_true", help="逐表打印行数")
     d.set_defaults(func=cmd_db)
 
+    o = sub.add_parser("optimize", help="离线评测候选规则，门禁通过后上线或回滚")
+    osub = o.add_subparsers(dest="opt_cmd")
+    cases_default = str(ROOT / "tools" / "optimizer" / "event_cases.jsonl")
+
+    ob = osub.add_parser("baseline", help="只跑当前生效规则的基线评测")
+    ob.add_argument("--cases", default=cases_default, help="评测集（JSON 或 JSONL）")
+    ob.set_defaults(func=cmd_optimize)
+
+    oe = osub.add_parser("eval", help="离线对照评测候选，不改变生效规则")
+    oe.add_argument("--candidate", required=True, help="候选 JSON")
+    oe.add_argument("--cases", default=cases_default, help="评测集（JSON 或 JSONL）")
+    oe.add_argument("--actor", default="cli", help="操作人（写入审计）")
+    oe.set_defaults(func=cmd_optimize)
+
+    op = osub.add_parser("promote", help="重新评测，门禁通过后写入版本库并切换上线")
+    op.add_argument("--candidate", required=True, help="候选 JSON")
+    op.add_argument("--cases", default=cases_default, help="评测集（JSON 或 JSONL）")
+    op.add_argument("--actor", default="cli", help="操作人（写入审计）")
+    op.set_defaults(func=cmd_optimize)
+
+    orb = osub.add_parser("rollback", help="回滚到已归档版本或 baseline")
+    orb.add_argument("version", help="版本号，或 baseline")
+    orb.add_argument("--actor", default="cli", help="操作人（写入审计）")
+    orb.set_defaults(func=cmd_optimize)
+
+    os_ = osub.add_parser("status", help="查看当前生效版本与最近评测")
+    os_.add_argument("--limit", type=int, default=5)
+    os_.set_defaults(func=cmd_optimize)
+
+    oh = osub.add_parser("history", help="查看版本、评测与审计记录")
+    oh.add_argument("--limit", type=int, default=20)
+    oh.set_defaults(func=cmd_optimize)
+
+    o.set_defaults(func=cmd_optimize)
+
     args = p.parse_args(argv)
     if not getattr(args, "func", None):
         p.print_help()
@@ -582,8 +704,9 @@ def main(argv=None) -> int:
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
-    # db 子命令自己连库并给友好提示；其余命令先保证表已建好，并读回库里的模型配置
-    if args.cmd != "db":
+    # db 子命令自己连库并给友好提示；optimize 是离线评测，不依赖数据库；
+    # 其余命令先保证表已建好，并读回库里的模型配置
+    if args.cmd not in ("db", "optimize"):
         store.init()
         llmcfg.bootstrap()
     return args.func(args)

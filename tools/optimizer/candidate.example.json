@@ -1,0 +1,10 @@
+{
+  "kind": "event_rules",
+  "version": "cand-20261124-01",
+  "base_version": "baseline",
+  "description": "补充联合研发与战略投资的判类词",
+  "add_keywords": {
+    "product": ["联合研发"],
+    "finance": ["战略投资"]
+  }
+}

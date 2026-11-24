@@ -17,6 +17,7 @@ import re
 from dataclasses import dataclass
 
 from ..core.textproc import best_quote, cjk_count, clip, looks_tabular, norm, similarity, strip_tags
+from ..infra import optstore
 
 # ---------------- 事件类型 ----------------
 
@@ -46,6 +47,72 @@ EVENT_TYPES: list[tuple[str, str, tuple[str, ...]]] = [
 
 LABEL = {k: v for k, v, _ in EVENT_TYPES}
 KW = {k: v for k, _, v in EVENT_TYPES}
+
+
+def default_rules() -> list[dict]:
+    """内置规则的可序列化副本；离线评测与版本回滚都以它为基线。"""
+    return [{"type": key, "label": label, "keywords": list(kws)}
+            for key, label, kws in EVENT_TYPES]
+
+
+def normalize_rules(rules) -> list[dict] | None:
+    """校验并归一化规则。
+
+    只接受完整的事件类型集合，避免一个候选漏掉某类后把该类永久判成 other。
+    关键词按首次出现去重；标签固定用内置值，避免报告里的类型名与事实类型脱节。
+    """
+    if not isinstance(rules, (list, tuple)) or not rules:
+        return None
+    by_type: dict[str, dict] = {}
+    for item in rules:
+        if not isinstance(item, dict):
+            return None
+        key = str(item.get("type") or "").strip()
+        if key not in LABEL or key in by_type:
+            return None
+        raw = item.get("keywords")
+        if not isinstance(raw, (list, tuple)):
+            return None
+        kws = []
+        for word in raw:
+            w = str(word or "").strip()
+            if w and w not in kws:
+                kws.append(w)
+        if not kws or len(kws) > 200:
+            return None
+        by_type[key] = {"type": key, "label": LABEL[key], "keywords": kws}
+    if set(by_type) != set(LABEL):
+        return None
+    return [by_type[key] for key, _, _ in EVENT_TYPES]
+
+
+def active_version() -> str:
+    """当前生效版本；没有有效配置时视为内置基线。"""
+    payload = optstore.load_active()
+    if isinstance(payload, dict) and normalize_rules(payload.get("rules")):
+        return str(payload.get("version") or "baseline")
+    return "baseline"
+
+
+def active_rules() -> list[dict]:
+    """当前生效规则；文件损坏或校验失败时回退到内置规则，不阻断运行。"""
+    payload = optstore.load_active()
+    if isinstance(payload, dict):
+        rules = normalize_rules(payload.get("rules"))
+        if rules:
+            return rules
+    return default_rules()
+
+
+def rules_for_version(version: str) -> list[dict]:
+    """按运行开始时记录的版本取规则，续跑时不被中途上线的新版本串味。"""
+    if version and version != "baseline":
+        payload = optstore.load_version(version)
+        if isinstance(payload, dict):
+            rules = normalize_rules(payload.get("rules"))
+            if rules:
+                return rules
+    return default_rules()
 
 # 例行公告没有情报价值，直接跳过（否则周报会被"翌日披露报表"淹没）
 ROUTINE = re.compile(
@@ -107,7 +174,7 @@ _DATE_ISO = re.compile(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})")
 _DATE_MD = re.compile(r"(?<![\d年])(\d{1,2})\s*月\s*(\d{1,2})\s*日")
 
 
-def classify(title: str, body: str = "") -> tuple[str, float]:
+def classify(title: str, body: str = "", rules: list[dict] | None = None) -> tuple[str, float]:
     """
     按关键词加权判类。标题权重 5，正文只看前 1200 字（权重 1）。
 
@@ -116,12 +183,14 @@ def classify(title: str, body: str = "") -> tuple[str, float]:
     """
     t = title or ""
     b = (body or "")[:1200]
+    rules = normalize_rules(rules) or default_rules()
     best, best_score, best_title = "other", 0.0, 0
-    for key, _label, kws in EVENT_TYPES:
+    for rule in rules:
+        kws = rule["keywords"]
         ts = sum(5 for k in kws if k in t)
         score = ts + sum(1 for k in kws if k in b)
         if score > best_score:
-            best, best_score, best_title = key, score, ts
+            best, best_score, best_title = rule["type"], score, ts
     # 标题一个字都没命中时，正文零星出现一个词不足以为事件定性：
     # 公告正文几乎必提"董事会"，会让任何公告都被判成人事变动。
     if best_score == 0 or (best_title == 0 and best_score < 3):
@@ -170,8 +239,14 @@ def base_confidence(doc: dict) -> float:
     return 0.52
 
 
-def build_fact(doc: dict, names: set[str], default_year: int | None = None) -> Fact | None:
-    """单份材料 → 一条事实（或 None）。"""
+def build_fact(doc: dict, names: set[str], default_year: int | None = None,
+               rules: list[dict] | None = None) -> Fact | None:
+    """单份材料 → 一条事实（或 None）。
+
+    `rules` 由运行时显式传入；直接调用本函数时使用内置规则，避免测试与离线
+    回放被本机当前生效版本影响。
+    """
+    rules = normalize_rules(rules) or default_rules()
     title = strip_tags(doc.get("title") or "")
     body = doc.get("body") or ""
     if not title:
@@ -185,8 +260,10 @@ def build_fact(doc: dict, names: set[str], default_year: int | None = None) -> F
     if LOW_INFO_TITLE.match(title):
         return None
 
-    ftype, strength = classify(title, body)
+    ftype, strength = classify(title, body, rules)
     blob = f"{title}\n{body}"
+    kw = {rule["type"]: rule["keywords"] for rule in rules}
+    labels = {rule["type"]: rule["label"] for rule in rules}
 
     # 主体核验：既不在标题也不在正文提到目标公司，则不认（防止检索串味）
     if not subject_ok(blob, names):
@@ -196,7 +273,7 @@ def build_fact(doc: dict, names: set[str], default_year: int | None = None) -> F
     # 证据句：优先正文中最能支撑该类事件的句子，其次摘要，最后标题
     quote = ""
     if body and cjk_count(body) > 60:
-        quote = best_quote(body, list(KW.get(ftype, ())), prefer_money=(ftype in ("order", "capacity", "performance", "finance")))
+        quote = best_quote(body, list(kw.get(ftype, ())), prefer_money=(ftype in ("order", "capacity", "performance", "finance")))
     if not quote and doc.get("evidence_level") == "snippet" and body:
         quote = clip(body, 200)
     if not quote or looks_tabular(quote):
@@ -230,7 +307,7 @@ def build_fact(doc: dict, names: set[str], default_year: int | None = None) -> F
         edate = doc.get("published_at", "")[:10]
 
     return Fact(
-        type=ftype, type_label=LABEL.get(ftype, "其他"),
+        type=ftype, type_label=labels.get(ftype, LABEL.get(ftype, "其他")),
         statement=clip(title, 160), evidence_quote=clip(quote, 300),
         amount=amount, event_date=edate, confidence=conf,
         dedupe_key=norm(title)[:40], doc_id=doc.get("id", ""),

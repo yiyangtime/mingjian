@@ -38,6 +38,7 @@ mingjian/                    后端包
 │   ├── schema.py            表结构的单一来源，渲染 SQLite / PostgreSQL / MySQL 方言
 │   ├── llm.py               OpenAI 兼容调用与返回校验
 │   ├── llmcfg.py            服务商预设、多套配置、连接测试（落 settings 表）
+│   ├── optstore.py          离线候选版本、评测报告与审计的本地文件存储
 │   ├── scheduler.py         每天 / 每周表达式
 │   └── sources/
 │       ├── cninfo.py        巨潮：实体解析、公告列表与 PDF
@@ -53,6 +54,7 @@ mingjian/                    后端包
 │   ├── subject.py           非上市主体自述档案
 │   ├── discover.py          品类词反查候选竞品
 │   ├── memory.py            跨运行记忆
+│   ├── optimizer.py         离线候选评测、门禁、上线与回滚
 │   └── skills.py            技能注册表
 ├── runtime/
 │   ├── pipeline.py          七步编排 + 事件流 + 检查点
@@ -120,6 +122,11 @@ SQL。表结构在 `infra/schema.py` 里定义一份，可渲染成三种方言�
 `llmcfg.bootstrap()` 读回；`config.json` 的 `llm_*` 与 `MINGJIAN_LLM_*` 只在库里
 还没有配置时兜底，页面里「停用」会落库，重启后不会被环境变量顶回。
 
+离线优化不新增数据库表：生效规则指针、版本归档、评测报告与审计都在
+`data/optimizer/`。每次运行开始时读取一次版本，版本号写入 `runs.params` 与检查点，
+保证历史运行和续跑不被后续上线串味。候选只允许增量关键词，不能执行代码；
+详见 [optimizer.md](optimizer.md)。
+
 ## 五、并发模型
 
 - 单进程多线程：uvicorn 同步路由跑在线程池，作业队列、取消信号、调度线程都在进程内存里。
@@ -131,7 +138,7 @@ SQL。表结构在 `infra/schema.py` 里定义一份，可渲染成三种方言�
 | 你要做的事 | 落点 | 注意 |
 |---|---|---|
 | 加接口 | `api/routes/<领域>.py` + `routes/__init__.py` 登记 | 路由路径唯一、按领域打 tag |
-| 改判定规则 | `services/` | 必须同时加断言到 `tools/selftest_all.py` |
+| 改判定规则 | `services/` | 必须同时加断言到 `tools/selftest_all.py`；分类词表候选走 `optimizer` 门禁 |
 | 接新数据源 | `infra/sources/<源>.py` | 只做取数与归一化，不写业务判断；失败要可降级 |
 | 加报告节 | `services/report.py` | 同步 `docs/methodology.md` 与前端渲染 |
 | 加页面 | `web/src/features/<域>/` | 路由表登记；视图行数预算只降不升 |

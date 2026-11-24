@@ -54,6 +54,9 @@ class Pipeline:
         self.report_md = ""
         self.stats: dict = {}
         self.errors: list[str] = []
+        # 运行开始时固定规则版本：中途上线新版本不影响本次运行，续跑也按原版本
+        self.event_rules_version = ""
+        self.event_rules: list[dict] | None = None
 
     # ---- 事件 ----
     def _log(self, msg: str, level: str = "info") -> None:
@@ -73,6 +76,8 @@ class Pipeline:
     def run(self) -> dict:
         t0 = time.time()
         store.init()
+        self.event_rules_version = EX.active_version()
+        self.event_rules = EX.rules_for_version(self.event_rules_version)
         try:
             if not self.resume:
                 # 新运行使用新编号；若人为复用编号，先清掉旧产物，避免新旧材料混在一起
@@ -130,6 +135,7 @@ class Pipeline:
         store.save_checkpoint(self.run_id, step, {
             "entity_key": self.entity_key, "entity": self.entity,
             "profile": self.profile, "quote": self.quote, "stats": self.stats,
+            "event_rules_version": self.event_rules_version,
         })
 
     def _restore(self) -> int:
@@ -144,6 +150,8 @@ class Pipeline:
         self.profile = p.get("profile") or {}
         self.quote = p.get("quote") or {}
         self.stats = p.get("stats") or {}
+        self.event_rules_version = p.get("event_rules_version") or self.event_rules_version or "baseline"
+        self.event_rules = EX.rules_for_version(self.event_rules_version)
         name = self.entity.get("short_name") or self.company
         self._log(f"从第 {cp['step']} 步检查点续跑（{name}）", "ok")
         return int(cp["step"])
@@ -209,7 +217,9 @@ class Pipeline:
             code=ent.get("code", ""), org_id=ent.get("org_id", ""),
             market=ent.get("market", ""), resolved_by=ent.get("resolved_by", ""),
         )
-        store.create_run(self.run_id, self.entity_key, self.company, self.cfg.to_dict())
+        params = self.cfg.to_dict()
+        params["event_rules_version"] = self.event_rules_version or EX.active_version()
+        store.create_run(self.run_id, self.entity_key, self.company, params)
         self._save_cp(1)
         self._step(1, "实体解析", "done", f"{name} {ent.get('code') or ''}".strip())
 
@@ -330,11 +340,13 @@ class Pipeline:
         self._step(4, "事实抽取", "start")
         names = self._names()
         year = time.localtime().tm_year
+        rules = self.event_rules or EX.rules_for_version(self.event_rules_version)
+        self.stats["event_rules_version"] = self.event_rules_version or "baseline"
         raw: list[EX.Fact] = []
         for d in self.docs:
             self._tick()
             try:
-                f = EX.build_fact(d, names, year)
+                f = EX.build_fact(d, names, year, rules=rules)
             except Exception:
                 f = None
             if f:

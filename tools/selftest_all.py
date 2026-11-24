@@ -11,6 +11,7 @@
   竞品矩阵      —— 维度×公司对齐，空维度不占行
   技能与记忆    —— 注册表拦截、参数校验、记忆去重/召回/删除、上下文预算截断
   调度与落库    —— 每天/每周下次触发时间、事件 seq、检查点、定时任务读写
+  离线优化      —— 候选校验、基线对照、门禁拒绝、上线与回滚
 
 纯函数为主，不依赖网络；联网链路由 API 冒烟另行验证。
 """
@@ -25,7 +26,7 @@ from mingjian.core import context  # noqa: E402
 from mingjian.infra import llmcfg, scheduler, store  # noqa: E402
 from mingjian.infra.sources import cninfo  # noqa: E402
 from mingjian.runtime import compare  # noqa: E402
-from mingjian.services import discover, extract, govpolicy, memory, metrics, skills, subject, topic  # noqa: E402
+from mingjian.services import discover, extract, govpolicy, memory, metrics, optimizer, skills, subject, topic  # noqa: E402
 
 CASES = []
 
@@ -615,6 +616,54 @@ def _llm_settings():
         store.DB_PATH = old_path
         store.DB_URL = old_url
         CFG.llm_base, CFG.llm_key, CFG.llm_model, CFG.llm_timeout = old_cfg
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@case("离线优化：候选门禁、上线、版本固定与回滚")
+def _optimizer_gate():
+    import json
+    import shutil
+    import tempfile
+
+    from mingjian.infra import optstore
+
+    tmpdir = pathlib.Path(tempfile.mkdtemp(prefix="mingjian_opt_"))
+    old_opt = optstore.OPT_DIR
+    cases_path = ROOT / "tools" / "optimizer" / "event_cases.jsonl"
+    candidate_path = ROOT / "tools" / "optimizer" / "candidate.example.json"
+    optstore.OPT_DIR = tmpdir
+    try:
+        cases = optimizer.load_cases(cases_path)
+        report = optimizer.evaluate_file(candidate_path, cases_path)
+        assert report["gate"]["passed"], report["gate"]
+        assert report["candidate_metrics"]["accuracy"] > report["baseline"]["metrics"]["accuracy"]
+
+        result = optimizer.promote(candidate_path, cases_path, actor="selftest")
+        assert result["version"] == "cand-20261124-01"
+        assert extract.active_version() == "cand-20261124-01"
+        rules = extract.active_rules()
+        assert extract.classify("某某企业签订联合研发协议", rules=rules)[0] == "product"
+        assert optimizer.status()["active"]["version"] == "cand-20261124-01"
+
+        optimizer.rollback("baseline", actor="selftest")
+        assert extract.active_version() == "baseline"
+        assert extract.classify("某某企业签订联合研发协议", rules=extract.active_rules())[0] == "order"
+
+        bad = {"kind": "event_rules", "version": "cand-bad-01", "base_version": "baseline",
+               "add_keywords": {"risk": ["企业"]}}
+        bad_path = tmpdir / "bad.json"
+        bad_path.write_text(json.dumps(bad, ensure_ascii=False), encoding="utf-8")
+        bad_report = optimizer.evaluate_file(bad_path, cases_path)
+        assert not bad_report["gate"]["passed"], bad_report["gate"]
+        try:
+            optimizer.promote(bad_path, cases_path, actor="selftest")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("门禁未通过的候选不应上线")
+        assert extract.active_version() == "baseline"
+    finally:
+        optstore.OPT_DIR = old_opt
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 

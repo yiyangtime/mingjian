@@ -49,6 +49,7 @@ python -m mingjian serve                      # 打开 http://127.0.0.1:8765
 ```bash
 python -m mingjian run 某某企业          # 跑一次，报告落 output/
 python -m mingjian run 某某企业 --days 60  # 自定义回溯窗口
+python -m mingjian optimize eval --candidate tools/optimizer/candidate.example.json  # 离线评测候选
 ```
 
 ### 方式二：Docker
@@ -96,6 +97,10 @@ mingjian serve
 运行治理：事件逐条落库可回放、取消在步骤边界生效、第 1–4 步检查点续跑、
 每天/每周定时任务、确认与修正只追加不覆盖。
 
+事件分类词表另有一套离线优化闭环：候选只允许增量关键词，先在冻结评测集上
+做基线对照，通过门禁后才切换生效版本；历史运行按原版本留痕，可一键回滚。
+命令与门禁说明见 [docs/optimizer.md](docs/optimizer.md)。
+
 ## 报告结构
 
 - **公司情报（八节）**：公司速览 / 本期要点 / 事实清单 / 变化对比 / 判断 /
@@ -114,8 +119,8 @@ api → runtime → services → infra → core
 ```
 
 - `core`：日志、HTTP、文本、PDF、上下文预算
-- `infra`：数据库（SQLite / PostgreSQL / MySQL）、巨潮 / 东财、模型服务、调度
-- `services`：抽取、分类、归因、成稿、政策解析（不感知 HTTP）
+- `infra`：数据库（SQLite / PostgreSQL / MySQL）、巨潮 / 东财、模型服务、调度、离线版本存储
+- `services`：抽取、分类、归因、成稿、政策解析、离线候选评测（不感知 HTTP）
 - `runtime`：七步管道、竞品对比、作业队列与断点
 - `api`：九个领域路由、统一错误形状、SPA 托管
 
@@ -147,7 +152,7 @@ api → runtime → services → infra → core
 ```bash
 pip install -e ".[dev]"
 ruff check .
-python tools/selftest_all.py        # 37 项断言：抽取 / 归因 / 矩阵 / 政策 / 调度 / 落库 / 方言 / 模型配置
+python tools/selftest_all.py        # 38 项断言：抽取 / 归因 / 矩阵 / 政策 / 调度 / 落库 / 方言 / 离线优化
 python tools/selftest_arch.py       # 分层边界、路由唯一性、前端隔离、视图体积棘轮
 python -m mingjian db --counts      # 当前数据库、版本与各表行数
 cd web && npm ci && npm run build   # vue-tsc 类型检查 + 构建
@@ -185,14 +190,16 @@ Node 20 上跑同样的门禁，并做一次服务冒烟。
 - **服务必须单进程运行**：作业状态与调度线程在进程内存里，不要用 `--workers N`。
 - **定时任务依赖服务常驻**，停机期间错过的时点不补跑。
 - **智能体是受控工作流**：技能按白名单执行，模型不选工具、不规划；记忆检索是字面词匹配。
+- **离线优化目前只覆盖事件分类词表**：候选必须人工或外部工具生成，先过离线评测与门禁；
+  其他规则、提示词和报告模板尚未纳入自动门禁。
 
 ## 项目结构
 
 ```text
 mingjian/            后端包（core / infra / services / runtime / api / cli / server）
 web/                 前端（Vue 3 + TypeScript + Vite，dist 随仓库分发）
-tools/               自测与架构门禁
-docs/                architecture / methodology / data-sources / policy-import / database
+tools/               自测、架构门禁与离线评测样例
+docs/                architecture / methodology / data-sources / policy-import / database / optimizer
 sql/                 SQLite / PostgreSQL / MySQL 初始化脚本（由表结构定义生成）
 materials/           政策材料投放目录（真实材料不入库）
 data/ output/ logs/  运行时数据，已在 .gitignore 中排除
