@@ -9,7 +9,7 @@
 |---|---|---|---|
 | 巨潮资讯 | 实体解析（代码 / orgId / 全称）、公告列表、公告 PDF | `infra/sources/cninfo.py` | 实体解析失败则整次运行失败并提示；公告失败则该路材料为空，记入缺口 |
 | 东方财富 | 公司档案、主营构成、定期报告指标、资讯检索 | `infra/sources/eastmoney.py` | 档案缺失时用巨潮字段兜底；指标取不到则专题不出点；资讯为空只减少覆盖 |
-| 工业和信息化部 | 产业政策、专项资金、智能工厂等公告 | `services/govpolicy.py` | 检索失败时返回空结果与原因，不编造条目 |
+| 工业和信息化部 | 产业政策、专项资金等公告 | `services/govpolicy.py` | 检索失败时返回空结果与原因，不编造条目 |
 | 省级工信主管部门（31 个） | 地方政策与补贴公告 | `services/govpolicy.py` 的 `PROVINCE_SITES` | 站点不可达记入 `data/prov_health.json`，页面提示「已知取不到」 |
 | 用户上传材料 | 政策文件（pdf / docx / txt / md / html） | `services/policy.py` | 单份失败只影响该份，进异常清单；扫描件因无文本层判失败 |
 

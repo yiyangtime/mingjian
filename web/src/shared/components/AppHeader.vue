@@ -61,9 +61,12 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <nav class="nav">
-        <RouterLink v-for="it in items" :key="it.to" :to="it.to" :class="{ on: isOn(it.to) }">
+        <RouterLink
+          v-for="it in items" :key="it.to" :to="it.to"
+          :data-tone="it.icon" :class="{ on: isOn(it.to) }"
+        >
           <NavIcon :name="it.icon" />
-          <span>{{ it.label }}</span>
+          <span class="nav-label">{{ it.label }}</span>
         </RouterLink>
       </nav>
       <div class="hstate">
@@ -137,19 +140,57 @@ onBeforeUnmount(() => {
   max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .nav {
-  display: flex; gap: 2px; justify-self: center; max-width: 100%;
+  display: flex; gap: 4px; justify-self: center; max-width: 100%;
   overflow-x: auto; scrollbar-width: none;
 }
 .nav::-webkit-scrollbar { display: none; }
+/* 六个入口各用一组渐变：文字、图标与底色同色系，互不混淆 */
 .nav a {
+  --c1: #1D4ED8;
+  --c2: #0369A1;
+  --tint: color-mix(in srgb, var(--c1) 9%, transparent);
+  --tint2: color-mix(in srgb, var(--c2) 5%, transparent);
+  --tint-strong: color-mix(in srgb, var(--c1) 16%, transparent);
+  --tint2-strong: color-mix(in srgb, var(--c2) 8%, transparent);
+  --edge: color-mix(in srgb, var(--c1) 26%, transparent);
+  position: relative;
   display: inline-flex; align-items: center; gap: 6px;
-  font-size: 13px; color: var(--sub); text-decoration: none; padding: 8px 13px;
-  border-radius: 9px; white-space: nowrap; transition: background .14s, color .14s;
+  font-size: 13px; font-weight: 500; color: var(--c1); text-decoration: none;
+  padding: 8px 13px; border: 1px solid transparent; border-radius: 10px;
+  background: linear-gradient(135deg, var(--tint), var(--tint2));
+  white-space: nowrap;
+  transition: background .16s, border-color .16s, box-shadow .16s;
 }
-.nav a :deep(.nav-icon) { opacity: .76; transition: opacity .14s; }
+.nav a[data-tone="company"] { --c1: #1D4ED8; --c2: #0369A1; }
+.nav a[data-tone="policy"] { --c1: #6D28D9; --c2: #7E22CE; }
+.nav a[data-tone="competitor"] { --c1: #C2410C; --c2: #BE123C; }
+.nav a[data-tone="metrics"] { --c1: #047857; --c2: #0F766E; }
+.nav a[data-tone="agent"] { --c1: #BE185D; --c2: #A21CAF; }
+.nav a[data-tone="settings"] { --c1: #B45309; --c2: #A16207; }
+.nav a .nav-label { color: var(--c1); }
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  .nav a .nav-label {
+    background-image: linear-gradient(100deg, var(--c1), var(--c2));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+  }
+}
+.nav a :deep(.nav-icon) { opacity: .86; transition: opacity .16s; }
 .nav a:hover :deep(.nav-icon), .nav a.on :deep(.nav-icon) { opacity: 1; }
-.nav a:hover { color: var(--ink); background: #F3F5F9; }
-.nav a.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.nav a:hover, .nav a.on {
+  background: linear-gradient(135deg, var(--tint-strong), var(--tint2-strong));
+  border-color: var(--edge);
+  box-shadow: 0 3px 10px var(--tint);
+}
+.nav a.on { font-weight: 600; }
+.nav a.on::after {
+  content: '';
+  position: absolute; left: 13px; right: 13px; bottom: 3px; height: 2px;
+  border-radius: 2px; background: linear-gradient(90deg, var(--c1), var(--c2));
+}
+.nav a:focus-visible { outline: 2px solid var(--c1); outline-offset: 2px; }
 @media (max-width: 1180px) {
   .hwrap { grid-template-columns: minmax(0, 1fr) auto; row-gap: 6px; }
   .hside { grid-column: 1; }

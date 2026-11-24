@@ -7,11 +7,11 @@
 
 | 方式 | 适用格式 | 怎么做 |
 |---|---|---|
-| **A. 按产业自动获取**（推荐） | 官网在线文件 | 打开 `/policy` → 输入公司名 → 点「获取政策与补贴公告」。按公司行业与注册地，去工业和信息化部站内检索 + 省级工信主管部门门户抓取，抓回即抽字段并给原文链接 |
+| **A. 按产业自动获取**（推荐） | 官网在线文件 | 打开 `/policy` → 输入公司名 → 点「获取政策与补贴公告」。按主体行业与注册地，在已接入的政策站点检索并抓取，抓回即抽字段并给原文链接 |
 | **B. 目录扫描** | `.pdf` `.docx` `.txt` `.md` `.html` | 文件放 `materials/` → 在 `/policy` 点「重新扫描 materials/」 |
 | **C. 页面内拖入** | 同上 | 在 `/policy` 把文件拖进「材料来源」区域，上传后服务端即时解析 |
 | **D. 粘贴全文** | 任意（含扫描件的识别结果） | `/policy` 点「粘贴全文解析」，粘贴正文后解析 |
-| **E. 命令行** | 同上 | `python -m mingjian policy --dir materials --csv output/policy.csv`，或 `python -m mingjian gov 某某科技` |
+| **E. 命令行** | 同上 | `python -m mingjian policy --dir materials --csv output/policy.csv`，或 `python -m mingjian gov 某某企业` |
 
 B—E 走同一个解析模块 `mingjian/services/policy.py`；A 先取回官网原文，再交给同一模块解析。
 五种方式的结果口径一致。
@@ -63,8 +63,8 @@ python -m mingjian policy --dir materials --limit 10
   300dpi 以上可编辑版本。
 - `.doc`（旧版二进制）不支持，需另存为 `.docx`。
 - 复杂合并单元格的表格，字段抽取可能错位，需人工复核。
-- 抽取规则按工信系统政策公告的常见表述编写；其他部委文风可能需要补充规则，
-  改 `mingjian/services/policy.py` 里的同名函数即可，网页与命令行同时生效。
+- 抽取规则按当前接入站点的政策公告常见表述编写；新增来源或文风差异时
+  可能需要补充规则，改 `mingjian/services/policy.py` 里的同名函数即可，网页与命令行同时生效。
 
 ## 六、自测
 
