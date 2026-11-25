@@ -1098,6 +1098,35 @@ def _search_status():
         assert eastmoney.search("某某企业", meta=meta) == []
         assert meta["status"] == "empty", meta
 
+        # result 空对象也是“确实没结果”，不能误报成上游风控
+        net.fetch = lambda url, headers=None: _Resp('cb({"result":{}})')
+        meta = {}
+        assert eastmoney.search("某某企业", meta=meta) == []
+        assert meta["status"] == "empty", meta
+
+        # 上游回调名会从 cb 换成 jQuery3510..._1693...，不能只认 cb(
+        jq_body = ('jQuery35108723733748578402_1693632913001({"result":'
+                   '{"cmsArticleWebOld":[{"title":"某某企业获订单",'
+                   '"url":"https://example.invalid/jq","mediaName":"测试源",'
+                   '"date":"2026-11-21 09:00:00","content":"正文"}]}});')
+        net.fetch = lambda url, headers=None: _Resp(jq_body)
+        meta = {}
+        items = eastmoney.search("某某企业", meta=meta)
+        assert len(items) == 1 and items[0]["title"] == "某某企业获订单", items
+        assert meta["status"] == "ok", meta
+
+        # 风控时 HTTP 仍是 200，但 result 只有 passportWeb，没有文章列表
+        risk_body = 'jQuery1({"result":{"passportWeb":{"uid":"x"}}})'
+        net.fetch = lambda url, headers=None: _Resp(risk_body)
+        meta = {}
+        assert eastmoney.search("某某企业", meta=meta) == []
+        assert meta["status"] == "error" and "风控" in meta["error"], meta
+
+        net.fetch = lambda url, headers=None: _Resp('cb({"result":{"foo":1}})')
+        meta = {}
+        assert eastmoney.search("某某企业", meta=meta) == []
+        assert meta["status"] == "error" and "缺少文章列表" in meta["error"], meta
+
         net.fetch = lambda url, headers=None: _Resp("oops")
         meta = {}
         assert eastmoney.search("某某企业", meta=meta) == []
@@ -1131,7 +1160,17 @@ def _search_status():
         return []
 
     old_search = eastmoney.search
+    from mingjian.infra.sources import baidu
+    old_backup = baidu.search
+
+    def no_backup(keyword, page=1, size=10, meta=None):
+        if meta is not None:
+            meta.update({"status": "error", "error": "备用源不可用",
+                         "ms": 0, "raw": 0})
+        return []
+
     try:
+        baidu.search = no_backup
         eastmoney.search = partial_search
         trace: dict = {}
         items = eastmoney.news_bundle("某某企业", "某某企业",
@@ -1147,6 +1186,150 @@ def _search_status():
         assert all(q["status"] == "empty" for q in trace["queries"]), trace
     finally:
         eastmoney.search = old_search
+        baidu.search = old_backup
+
+
+@case("检索回退：主源风控时走备用源并留痕")
+def _search_fallback():
+    from mingjian.infra.sources import baidu, eastmoney
+
+    old_search, old_backup = eastmoney.search, baidu.search
+
+    def risk(keyword, page=1, size=10, meta=None):
+        if meta is not None:
+            meta.update({"status": "error", "error": "上游风控：仅返回股民资料",
+                         "ms": 3, "raw": 0})
+        return []
+
+    def backup(keyword, page=1, size=10, meta=None):
+        if meta is not None:
+            meta.update({"status": "ok", "error": "", "ms": 7, "raw": 1})
+        return [{"kind": "news", "title": "某某企业获订单",
+                 "url": "https://example.invalid/b", "source": "备用源",
+                 "published_at": "2026-11-22", "body": "某某企业获订单",
+                 "extra": {}}]
+
+    try:
+        eastmoney.search, baidu.search = risk, backup
+        meta: dict = {}
+        items = eastmoney.search_any("某某企业", meta=meta)
+        assert [it["url"] for it in items] == ["https://example.invalid/b"], items
+        assert meta["via"] == "baidu" and "风控" in meta["fallback_from"], meta
+        assert items[0]["extra"]["via"] == "baidu", items
+
+        trace: dict = {}
+        items = eastmoney.news_bundle("某某企业", "某某企业",
+                                      terms=["扩产 产能"], trace=trace)
+        assert [it["url"] for it in items] == ["https://example.invalid/b"], items
+        assert all(q["via"] == "baidu" for q in trace["queries"]), trace
+
+        # 主源正常返回空结果时不回退，避免同一查询在不同源之间悄悄换口径
+        def empty(keyword, page=1, size=10, meta=None):
+            if meta is not None:
+                meta.update({"status": "empty", "error": "", "ms": 1, "raw": 0})
+            return []
+
+        eastmoney.search = empty
+        called: list[int] = []
+        baidu.search = lambda *a, **k: called.append(1) or []
+        assert eastmoney.search_any("某某企业") == []
+        assert not called, "主源空结果不应触发回退"
+    finally:
+        eastmoney.search, baidu.search = old_search, old_backup
+
+
+@case("百度资讯：首屏解析、日期归一与失败区分")
+def _baidu_search():
+    import re
+    from datetime import datetime
+
+    from mingjian.core import net
+    from mingjian.infra.sources import baidu
+
+    class _Resp:
+        def __init__(self, text):
+            self.text = text
+
+    html = (
+        '<h3 class="news-title_x"><a href="https://example.invalid/a?x=1&amp;y=2" '
+        'aria-label="标题：甲公司发布新品">甲公司发布新品</a></h3>'
+        '<div class="c-row"><span aria-label="发布于：昨天22:11">昨天22:11</span>'
+        '<span aria-label="摘要 甲公司发布新品，正文摘要 摘要结束，点击查看详情">'
+        '甲公司发布新品</span>'
+        '<span aria-label="新闻来源：测试媒体">测试媒体</span></div>'
+        '<h3 class="news-title_x"><a href="https://example.invalid/b" '
+        'aria-label="标题：乙公司中标">乙公司中标</a></h3>'
+        '<div><span aria-label="发布于：2026年11月20日">2026年11月20日</span>'
+        '<span aria-label="新闻来源：另一媒体">另一媒体</span></div>'
+    )
+    old_fetch = net.fetch
+    baidu._cache.clear()
+    try:
+        net.fetch = lambda url, headers=None: _Resp(html)
+        meta: dict = {}
+        items = baidu.search("甲公司回退测试", meta=meta)
+        assert len(items) == 2, items
+        assert items[0]["url"] == "https://example.invalid/a?x=1&y=2", items
+        assert items[0]["title"] == "甲公司发布新品", items
+        assert items[0]["source"] == "测试媒体", items
+        assert "正文摘要" in items[0]["body"], items
+        assert re.match(r"^\d{4}-\d{2}-\d{2} 22:11$", items[0]["published_at"]), items
+        assert items[1]["published_at"] == "2026-11-20", items
+        assert meta["via"] == "baidu" and meta["status"] == "ok", meta
+        now = datetime(2026, 11, 25, 10, 0)
+        assert baidu._date("昨天", now=now) == "2026-11-24", baidu._date("昨天", now=now)
+        assert baidu._date("3天前", now=now) == "2026-11-22", baidu._date("3天前", now=now)
+
+        meta = {}
+        assert baidu.search("甲公司回退测试", page=2, meta=meta) == []
+        assert meta["status"] == "empty" and "首屏" in meta["error"], meta
+
+        baidu._cache.clear()
+        net.fetch = lambda url, headers=None: _Resp("<html>百度安全验证</html>")
+        meta = {}
+        assert baidu.search("另一关键词", meta=meta) == []
+        assert meta["status"] == "error" and "验证" in meta["error"], meta
+
+        net.fetch = lambda url, headers=None: _Resp("<html>没有找到相关新闻</html>")
+        meta = {}
+        assert baidu.search("第三关键词", meta=meta) == []
+        assert meta["status"] == "empty", meta
+
+        net.fetch = lambda url, headers=None: _Resp("<html>结构变了</html>")
+        meta = {}
+        assert baidu.search("第四关键词", meta=meta) == []
+        assert meta["status"] == "error" and "结构" in meta["error"], meta
+    finally:
+        net.fetch = old_fetch
+        baidu._cache.clear()
+
+
+@case("实体搜索：无匹配时保留按输入名称建档")
+def _entity_manual():
+    from mingjian.api.routes import entities
+    from mingjian.infra.sources import cninfo
+
+    old_listed, old_clues = cninfo.search, discover.clues
+    q = "某某未收录企业"
+    try:
+        cninfo.search = lambda kw, limit: []
+        discover.clues = lambda kw, limit: []
+        out = entities.entity_search(q, limit=3)["items"]
+        assert out and out[-1]["source"] == "manual" and out[-1]["name"] == q, out
+
+        cninfo.search = lambda kw, limit: [{"name": q, "code": "000001",
+                                            "market": "主板"}]
+        out = entities.entity_search(q, limit=3)["items"]
+        assert out and out[0]["source"] == "listed", out
+        assert not any(x["source"] == "manual" for x in out), out
+
+        cninfo.search = lambda kw, limit: []
+        discover.clues = lambda kw, limit: [
+            {"name": f"资讯企业{i}", "hint": "测试"} for i in range(6)]
+        out = entities.entity_search(q, limit=3)["items"]
+        assert len(out) == 3 and out[-1]["source"] == "manual", out
+    finally:
+        cninfo.search, discover.clues = old_listed, old_clues
 
 
 @case("公告覆盖：命中、缺口与分数排序")
@@ -1308,6 +1491,169 @@ def _llm_migrate():
         store.DB_URL = old_url
         llmcfg.CONFIG_PATH = old_conf
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@case("工商接口：配置落库、响应归一化与错误区分")
+def _registry_basic():
+    import shutil
+    import tempfile
+    import types
+
+    from mingjian.infra import registry
+
+    tmpdir = pathlib.Path(tempfile.mkdtemp(prefix="mingjian_reg_"))
+    old_path, old_url, old_conn = store.DB_PATH, store.DB_URL, getattr(store._local, "conn", None)
+    old_fetch = registry.fetch
+    store.DB_PATH, store.DB_URL, store._local.conn = tmpdir / "t.db", "", None
+    registry._cache.clear()
+    calls = []
+    row = {"name": "某某智能装备有限公司", "creditCode": "91320100MA1XXXX01X",
+           "legalPersonName": "张三", "regCapital": "5000万人民币", "regStatus": "存续",
+           "estiblishTime": 1577836800000, "regLocation": "某省某市某区",
+           "industry": "专用设备制造业", "businessScope": "智能装备研发、制造"}
+    payload = {"error_code": 0, "reason": "ok", "result": {"items": [row]}}
+
+    def fake(url, **kw):
+        calls.append(url)
+        return types.SimpleNamespace(json=lambda: payload)
+
+    registry.fetch = fake
+    try:
+        out = registry.save_profile({"preset": "tianyancha", "name": "测试接口",
+                                    "key": "tk-1234"})
+        assert out["enabled"] and out["active_id"], out
+        assert out["profiles"][0]["key_hint"] == "…1234", out
+        assert "key" not in out["profiles"][0], out          # 密钥不回传页面
+        assert store.get_setting("registry")["profiles"][0]["key"] == "tk-1234"
+
+        meta: dict = {}
+        items = registry.search("某某", limit=5, meta=meta)
+        assert meta["status"] == "ok" and meta["vendor"] == "tianyancha", meta
+        assert items and items[0]["credit_code"] == "91320100MA1XXXX01X", items
+        assert items[0]["establish_date"] == "2020-01-01", items[0]
+        assert items[0]["legal_person"] == "张三", items[0]
+        assert "pageSize=5" in calls[0] and "word=" in calls[0], calls[0]
+
+        # 已缓存：同一关键词不再消耗接口额度
+        n = len(calls)
+        assert registry.search("某某", limit=5), "缓存应命中"
+        assert len(calls) == n, calls
+        assert store.get_company("某某智能装备有限公司")["industry"] == "专用设备制造业"
+
+        registry._cache.clear()
+        payload.update({"error_code": 300002, "reason": "账号失效"})
+        meta = {}
+        registry.search("某某", limit=5, meta=meta)
+        assert meta["status"] == "error" and "账号失效" in meta["error"], meta
+
+        registry._cache.clear()
+        payload.clear()
+        meta = {}
+        registry.search("某某", limit=5, meta=meta)
+        assert meta["status"] == "error" and "结果路径" in meta["error"], meta
+
+        out = registry.clear()
+        assert not out["enabled"], out
+        meta = {}
+        assert registry.search("某某", meta=meta) == [] and meta["status"] == "disabled", meta
+    finally:
+        registry.fetch = old_fetch
+        registry._cache.clear()
+        if getattr(store._local, "conn", None) is not None:
+            store._local.conn.close()
+        store._local.conn = old_conn
+        store.DB_PATH, store.DB_URL = old_path, old_url
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@case("实体搜索：工商候选参与合并、去重与降级提示")
+def _entity_registry():
+    import shutil
+    import tempfile
+
+    from mingjian.api.routes import entities
+    from mingjian.infra import registry
+
+    tmpdir = pathlib.Path(tempfile.mkdtemp(prefix="mingjian_ent_") )
+    old_path, old_url, old_conn = store.DB_PATH, store.DB_URL, getattr(store._local, "conn", None)
+    old_listed, old_clues, old_search = cninfo.search, discover.clues, registry.search
+    old_enabled, old_local = registry.enabled, entities._local_matches
+    store.DB_PATH, store.DB_URL, store._local.conn = tmpdir / "t.db", "", None
+    try:
+        store.init()
+        entities._local_matches = lambda q, n: []
+        cninfo.search = lambda kw, limit: []
+        discover.clues = lambda kw, limit: []
+        registry.enabled = lambda: True
+
+        def fake_search(kw, limit=8, meta=None):
+            meta.update({"status": "ok", "vendor": "tianyancha", "ms": 5,
+                         "total": 1, "error": ""})
+            return [{"name": "某某新材料有限公司", "credit_code": "91320100MA000001X",
+                     "reg_status": "存续", "reg_capital": "1000万",
+                     "establish_date": "2021-03-01", "source": "registry:tianyancha"}]
+
+        registry.search = fake_search
+        out = entities.entity_search("某某新材料", limit=8)
+        reg = [x for x in out["items"] if x["source"] == "registry"]
+        assert reg and reg[0]["credit_code"].endswith("001X"), out
+        assert reg[0]["hint"] == "存续 · 1000万", reg[0]
+
+        # 证券库已命中时，同一主体不重复给工商候选
+        cninfo.search = lambda kw, limit: [{"name": "某某新材料有限公司",
+                                           "code": "000001", "market": "主板"}]
+        out = entities.entity_search("某某新材料", limit=8)
+        assert [x["source"] for x in out["items"]].count("listed") == 1, out
+        assert not any(x["source"] == "registry" for x in out["items"]), out
+
+        # 上游失败：保留其它候选，并把原因带回页面
+        cninfo.search = lambda kw, limit: []
+
+        def broken(kw, limit=8, meta=None):
+            meta.update({"status": "error", "vendor": "tianyancha", "ms": 9,
+                         "total": 0, "error": "网络失败：超时"})
+            return []
+
+        registry.search = broken
+        out = entities.entity_search("某某新材料", limit=8)
+        assert out["notes"] and "工商接口" in out["notes"][0], out
+        assert any(x["source"] == "manual" for x in out["items"]), out
+    finally:
+        cninfo.search, discover.clues, registry.search = old_listed, old_clues, old_search
+        registry.enabled, entities._local_matches = old_enabled, old_local
+        if getattr(store._local, "conn", None) is not None:
+            store._local.conn.close()
+        store._local.conn = old_conn
+        store.DB_PATH, store.DB_URL = old_path, old_url
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@case("公司档案：非上市主体用工商登记补全")
+def _entity_profile_registry():
+    from mingjian.api.routes import entities
+    from mingjian.infra import registry
+
+    old_resolve, old_listed = registry.resolve, cninfo.resolve
+    old_sub, old_cache = subject.get, dict(entities.profile_cache)
+    registry.resolve = lambda name: {
+        "name": "某某精工科技有限公司", "credit_code": "91320100MA000002X",
+        "industry": "通用设备制造业", "location": "某省某市",
+        "reg_status": "存续", "reg_capital": "800万",
+        "establish_date": "2019-06-01", "business": "精密零部件制造",
+    }
+    cninfo.resolve = lambda name: {}
+    subject.get = lambda key: {}
+    entities.profile_cache.clear()
+    try:
+        out = entities.entity_profile("某某精工")
+        assert out["listed"] is False and out["credit_code"].endswith("002X"), out
+        assert out["industry"] == "通用设备制造业", out
+        assert out["region"] == "某省某市" and out["reg_status"] == "存续", out
+        assert "工商登记" in out["source"], out
+    finally:
+        registry.resolve, cninfo.resolve, subject.get = old_resolve, old_listed, old_sub
+        entities.profile_cache.clear()
+        entities.profile_cache.update(old_cache)
 
 
 def main() -> int:

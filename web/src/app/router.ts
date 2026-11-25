@@ -11,7 +11,7 @@ const router = createRouter({
     { path: '/competitor', name: 'competitor', component: () => import('../features/competitor/CompetitorView.vue'), meta: { title: '竞品周报 · 明鉴' } },
     { path: '/metrics', name: 'metrics', component: () => import('../features/metrics/MetricsView.vue'), meta: { title: '指标联动 · 明鉴' } },
     { path: '/agent', name: 'agent', component: () => import('../features/agent/AgentView.vue'), meta: { title: '智能体 · 明鉴' } },
-    { path: '/settings', name: 'settings', component: () => import('../features/settings/SettingsView.vue'), meta: { title: '模型配置 · 明鉴' } },
+    { path: '/settings', name: 'settings', component: () => import('../features/settings/SettingsView.vue'), meta: { title: '接入配置 · 明鉴' } },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
   scrollBehavior() {

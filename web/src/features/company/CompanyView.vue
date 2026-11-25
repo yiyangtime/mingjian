@@ -858,9 +858,11 @@ onMounted(() => {
 
       <section class="card section-gap">
         <div class="tabs">
-          <div v-if="!reportOnly" class="tab" :class="{ on: tab === 'facts' }" @click="tab = 'facts'">事实清单<span class="c">{{ facts.length }}</span></div>
-          <div class="tab" :class="{ on: tab === 'report' }" @click="tab = 'report'">情报报告</div>
-          <div v-if="!reportOnly" class="tab" :class="{ on: tab === 'quality' }" @click="tab = 'quality'">质量与缺口</div>
+          <div class="seg">
+            <div v-if="!reportOnly" class="seg-i" :class="{ on: tab === 'facts' }" @click="tab = 'facts'">事实清单<span class="seg-n">{{ facts.length }}</span></div>
+            <div class="seg-i" :class="{ on: tab === 'report' }" @click="tab = 'report'">情报报告</div>
+            <div v-if="!reportOnly" class="seg-i" :class="{ on: tab === 'quality' }" @click="tab = 'quality'">质量与缺口</div>
+          </div>
           <div class="spacer"></div>
           <div class="tab-acts">
             <button class="btn btn-ghost btn-sm" @click="copyLink">复制链接</button>
@@ -1100,14 +1102,11 @@ onMounted(() => {
 .sbox .v small { font-size: 12px; font-weight: 500; color: var(--mute); margin-left: 3px; }
 .sbox.g .v { color: var(--ok); }
 
-.tabs { display: flex; gap: 4px; padding: 0 20px; border-bottom: 1px solid var(--line); align-items: center; flex-wrap: wrap; }
-.tab {
-  padding: 13px 15px; font-size: 13.5px; color: var(--sub); cursor: pointer;
-  border-bottom: 2px solid transparent; margin-bottom: -1px; font-weight: 500;
+.tabs {
+  display: flex; gap: 10px; padding: 10px 20px; border-bottom: 1px solid var(--line);
+  align-items: center; flex-wrap: wrap;
 }
-.tab.on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
-.tab .c { font-size: 11px; background: #F1F3F6; color: var(--sub); padding: 1px 6px; border-radius: 9px; margin-left: 5px; }
-.tab-acts { display: flex; gap: 8px; padding: 8px 0; margin-left: auto; flex-wrap: wrap; }
+.tab-acts { display: flex; gap: 8px; flex-wrap: wrap; }
 
 .facts-bar {
   padding: 14px 20px; border-bottom: 1px solid var(--line);

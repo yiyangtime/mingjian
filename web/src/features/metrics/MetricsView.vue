@@ -495,10 +495,10 @@ onMounted(() => {
 
       <!-- 右侧：口径 / 关联情报 / 血缘 -->
       <section class="card">
-        <div class="ptabs">
-          <div class="ptab" :class="{ on: pane === 'cal' }" @click="pane = 'cal'">口径定义</div>
-          <div class="ptab" :class="{ on: pane === 'ev' }" @click="pane = 'ev'">关联情报</div>
-          <div class="ptab" :class="{ on: pane === 'ln' }" @click="pane = 'ln'">数据血缘</div>
+        <div class="seg fill ptabs">
+          <div class="seg-i" :class="{ on: pane === 'cal' }" @click="pane = 'cal'">口径定义</div>
+          <div class="seg-i" :class="{ on: pane === 'ev' }" @click="pane = 'ev'">关联情报</div>
+          <div class="seg-i" :class="{ on: pane === 'ln' }" @click="pane = 'ln'">数据血缘</div>
         </div>
         <div v-if="!curMetric" class="empty">未选择指标</div>
         <template v-else>
@@ -548,9 +548,9 @@ onMounted(() => {
         <span class="n">{{ structNote }}</span>
       </div>
       <div class="pane-body">
-        <div class="ptabs inline">
-          <div class="ptab" :class="{ on: sKind === 'prod' }" @click="sKind = 'prod'">按产品</div>
-          <div class="ptab" :class="{ on: sKind === 'reg' }" @click="sKind = 'reg'">按地区</div>
+        <div class="seg ptabs inline">
+          <div class="seg-i" :class="{ on: sKind === 'prod' }" @click="sKind = 'prod'">按产品</div>
+          <div class="seg-i" :class="{ on: sKind === 'reg' }" @click="sKind = 'reg'">按地区</div>
         </div>
         <div class="st-wrap">
           <div v-if="!structRows.length" class="fact">未取到主营业务构成</div>
@@ -750,15 +750,10 @@ a.src-a:hover { background: #F2F7FE; }
 .open-q li::marker { color: var(--mute); }
 
 /* 右侧面板 */
-.ptabs { display: flex; border-bottom: 1px solid #EDEFF2; }
-.ptab {
-  flex: 1; text-align: center; padding: 11px 0; font-size: 12.5px; color: var(--sub);
-  cursor: pointer; border-bottom: 2px solid transparent; user-select: none;
-}
-.ptab.on { color: var(--accent); font-weight: 600; border-bottom-color: var(--accent); }
-.ptabs.inline { border-bottom: none; margin-bottom: 10px; flex: none; }
-.ptabs.inline .ptab { flex: none; padding: 6px 14px; border: 1px solid var(--line); border-radius: 7px; margin-right: 6px; }
-.ptabs.inline .ptab.on { border-color: var(--accent); background: var(--accent-soft); }
+.ptabs { margin: 8px 10px 6px; }
+.ptabs .seg-i { font-size: 12.5px; padding: 6px 0; }
+.ptabs.inline { width: fit-content; margin: 0 0 12px; }
+.ptabs.inline .seg-i { flex: none; padding: 5px 12px; }
 .m-title { font-size: 13.5px; font-weight: 650; margin-bottom: 12px; }
 .m-title-sub { font-weight: 400; color: var(--mute); font-size: 11px; margin-left: 6px; }
 .kv { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px dashed #F1F3F6; font-size: 12.5px; line-height: 1.75; }

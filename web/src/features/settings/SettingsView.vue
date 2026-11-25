@@ -7,6 +7,7 @@ import { toast } from '../../shared/composables/toast'
 import { confirmAsk } from '../../shared/composables/confirm'
 import { DEFAULT_ACTOR, actorName, setActorName } from '../../shared/composables/identity'
 import ModelProfilesCard from './components/ModelProfilesCard.vue'
+import RegistryCard from './components/RegistryCard.vue'
 import SystemStatusCard from './components/SystemStatusCard.vue'
 import AuditCard from './components/AuditCard.vue'
 import type { AuditRow, LlmConfig, Profile, Provider, SystemInfo, TestResp } from './types'
@@ -373,6 +374,8 @@ onMounted(() => {
         <button class="btn btn-ghost" @click="editOpen = false">取消</button>
       </template>
     </AppModal>
+
+    <RegistryCard />
 
     <SystemStatusCard :sys="sys" :error="sysErr" @refresh="loadSystem" />
 

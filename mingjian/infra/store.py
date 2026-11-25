@@ -174,6 +174,24 @@ CREATE TABLE IF NOT EXISTS memory (
 CREATE INDEX IF NOT EXISTS idx_memory_scope ON memory(scope);
 CREATE INDEX IF NOT EXISTS idx_memory_kind ON memory(kind);
 
+CREATE TABLE IF NOT EXISTS companies (
+  key TEXT PRIMARY KEY,          -- 归一化企业名
+  name TEXT,
+  credit_code TEXT,              -- 统一社会信用代码
+  legal_person TEXT,
+  reg_capital TEXT,
+  reg_status TEXT,               -- 存续 / 在业 / 注销 / 吊销
+  establish_date TEXT,
+  location TEXT,                 -- 注册地址
+  industry TEXT,
+  business TEXT,                 -- 经营范围
+  source TEXT,                   -- 工商接口标识
+  raw TEXT,                      -- 上游原文，便于字段映射排错
+  fetched_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_company_name ON companies(name);
+CREATE INDEX IF NOT EXISTS idx_company_code ON companies(credit_code);
+
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,          -- 配置键，如 llm（模型接入配置）
   value TEXT NOT NULL,           -- JSON 原文
@@ -370,13 +388,51 @@ def table_counts() -> dict:
     out = {}
     for name in ("entities", "runs", "documents", "facts", "snapshots", "audit",
                  "run_events", "checkpoints", "schedules", "subjects", "memory",
-                 "settings"):
+                 "companies", "settings"):
         try:
             row = conn().execute(f"SELECT COUNT(*) AS n FROM {name}").fetchone()
             out[name] = int(row["n"] if row else 0)
         except Exception:  # noqa: BLE001
             out[name] = 0
     return out
+
+
+# ---------------- companies ----------------
+
+_COMPANY_COLS = ("key", "name", "credit_code", "legal_person", "reg_capital",
+                 "reg_status", "establish_date", "location", "industry",
+                 "business", "source", "raw", "fetched_at")
+
+
+def upsert_company(c: dict) -> None:
+    """按归一化名称落一条。工商接口按次计费，查过一次就不必再查。"""
+    with tx() as cx:
+        cx.execute(
+            dbmod.upsert_sql("companies", _COMPANY_COLS, ("key",), cx.dialect),
+            tuple(str(c.get(k) or "") for k in _COMPANY_COLS[:-1]) + (now(),))
+
+
+def get_company(key: str):
+    row = conn().execute("SELECT * FROM companies WHERE key=?", (key,)).fetchone()
+    return dict(row) if row else None
+
+
+def search_companies(q: str, limit: int = 8):
+    """本地工商缓存：名称或信用代码包含即命中，完全同名排最前、短名优先。"""
+    like = f"%{q}%"
+    op = dbmod.like_op(dialect())
+    rows = conn().execute(
+        f"SELECT * FROM companies WHERE name {op} ? OR credit_code {op} ? "
+        "ORDER BY CASE WHEN name=? THEN 0 ELSE 1 END, length(name) LIMIT ?",
+        (like, like, q, max(1, int(limit)))).fetchall()
+    return [dict(r) for r in rows]
+
+
+def company_stats() -> dict:
+    """缓存规模与最近抓取时间，供设置页展示。"""
+    row = conn().execute(
+        "SELECT COUNT(*) AS n, COALESCE(MAX(fetched_at),'') AS last FROM companies").fetchone()
+    return {"total": int(row["n"] if row else 0), "last_at": str(row["last"] if row else "")}
 
 
 # ---------------- settings ----------------

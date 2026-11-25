@@ -280,10 +280,15 @@ const pkSaving = ref(false)
 let pkTimer: number | undefined
 let pkSeq = 0
 
-// 输入词已经在候选里时不再重复给「按输入建档」入口
+// 输入词与候选互含时也算已命中：简称 vs 全称不应重复给「按输入建档」
 const pkExact = computed(() => {
   const kw = pkQ.value.trim()
-  return !!kw && pkItems.value.some((it) => it.name === kw)
+  if (!kw) return false
+  return pkItems.value.some((it) => {
+    const name = (it.name || '').trim()
+    return name === kw || (kw.length >= 2 && name.length >= 2
+      && (name.includes(kw) || kw.includes(name)))
+  })
 })
 
 // 已监测 + 本次勾选（去重）后的总数，用于提示 6 家上限
@@ -376,7 +381,8 @@ function togglePick(it: Monitor | SearchItem): void {
     toast(`最多 ${maxMonitors.value} 家，先移除一家`)
     return
   }
-  pkPicked.value.push({ name, code: it.code || undefined, market: it.market || undefined })
+  pkPicked.value.push({ name, code: it.code || undefined, market: it.market || undefined,
+                        credit_code: it.credit_code || undefined })
 }
 
 function unpick(name: string): void {
@@ -872,6 +878,7 @@ onBeforeUnmount(() => {
           <span class="pk-sellabel">待加入</span>
           <span v-for="p in pkPicked" :key="p.name" class="pk-chip">
             {{ p.name }}<small v-if="p.code">{{ p.code }}</small>
+            <small v-else-if="p.credit_code">{{ p.credit_code }}</small>
             <button type="button" :aria-label="'移出 ' + p.name" @click="unpick(p.name)">×</button>
           </span>
         </div>
@@ -885,10 +892,13 @@ onBeforeUnmount(() => {
             <div class="pk-main">
               <b>{{ it.name }}</b>
               <small v-if="it.code">{{ it.code }}</small>
+              <small v-else-if="it.credit_code">{{ it.credit_code }}</small>
               <span v-if="it.market" class="pk-mk">{{ it.market }}</span>
               <span v-if="it.delisted" class="pk-off">已退市</span>
+              <span v-else-if="it.source === 'registry'" class="pk-mk pk-reg" :title="it.hint || ''">工商登记</span>
               <span v-else-if="it.source === 'news'" class="pk-mk" :title="it.hint || ''">资讯线索</span>
               <span v-else-if="it.source === 'local'" class="pk-mk">本地档案</span>
+              <span v-else-if="it.source === 'manual'" class="pk-mk pk-manual" :title="it.hint || ''">手动建档</span>
             </div>
             <span class="pk-act">{{ isPicked(it.name) ? '已选' : hasMonitor(it.name) ? '已加入' : '加入' }}</span>
           </div>
@@ -984,9 +994,11 @@ onBeforeUnmount(() => {
 
       <section class="card section-gap">
         <div class="tabs">
-          <div class="tab" :class="{ on: tab === 'report' }" @click="tab = 'report'">周报正文</div>
-          <div class="tab" :class="{ on: tab === 'diff' }" @click="tab = 'diff'">横向对比</div>
-          <div class="tab" :class="{ on: tab === 'src' }" @click="tab = 'src'">来源与证据</div>
+          <div class="seg">
+            <div class="seg-i" :class="{ on: tab === 'report' }" @click="tab = 'report'">周报正文</div>
+            <div class="seg-i" :class="{ on: tab === 'diff' }" @click="tab = 'diff'">横向对比</div>
+            <div class="seg-i" :class="{ on: tab === 'src' }" @click="tab = 'src'">来源与证据</div>
+          </div>
         </div>
 
         <div v-show="tab === 'report'" class="report-wrap">
@@ -1117,6 +1129,8 @@ onBeforeUnmount(() => {
 .pk-main b { font-size: 13px; font-weight: 550; }
 .pk-main small { font-size: 11px; color: var(--mute); font-variant-numeric: tabular-nums; }
 .pk-mk { font-size: 10.5px; color: #1D4ED8; background: #EFF3FF; border-radius: 4px; padding: 1px 6px; }
+.pk-manual { color: #475467; background: #F2F4F7; }
+.pk-reg { color: #0E7490; background: #ECFEFF; }
 .pk-off { font-size: 10.5px; color: var(--err); background: var(--err-soft); border-radius: 4px; padding: 1px 6px; }
 .pk-act { flex: none; font-size: 11.5px; color: var(--accent); }
 .pk-row.added .pk-act { color: var(--mute); }
@@ -1170,13 +1184,8 @@ onBeforeUnmount(() => {
 .sbox .v { font-size: 26px; font-weight: 680; margin-top: 4px; letter-spacing: -.5px; }
 .sbox .v small { font-size: 11.5px; font-weight: 500; color: var(--mute); margin-left: 3px; }
 
-.tabs { display: flex; gap: 4px; padding: 0 20px; border-bottom: 1px solid var(--line); }
-.tab {
-  padding: 13px 15px; font-size: 13.5px; color: var(--sub); cursor: pointer;
-  border-bottom: 2px solid transparent; margin-bottom: -1px; font-weight: 500; user-select: none;
-}
-.tab.on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
-.report-wrap { padding: 26px 30px; }
+.tabs { display: flex; padding: 12px 20px 0; }
+.report-wrap { padding: 22px 30px 26px; }
 
 .src-table { width: 100%; border-collapse: collapse; }
 

@@ -22,7 +22,7 @@ const items: { to: string; label: string; icon: NavIconName }[] = [
   { to: '/competitor', label: '竞品周报', icon: 'competitor' },
   { to: '/metrics', label: '指标联动', icon: 'metrics' },
   { to: '/agent', label: '智能体', icon: 'agent' },
-  { to: '/settings', label: '模型配置', icon: 'settings' },
+  { to: '/settings', label: '接入配置', icon: 'settings' },
 ]
 
 const path = computed(() => route.path)
@@ -140,26 +140,26 @@ onBeforeUnmount(() => {
   max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .nav {
-  display: flex; gap: 4px; justify-self: center; max-width: 100%;
+  display: flex; gap: 2px; justify-self: center; max-width: 100%;
+  padding: 4px; border-radius: 14px;
+  background: linear-gradient(180deg, #F8FAFD, #F1F4F9);
+  border: 1px solid rgba(226, 232, 240, .95);
+  box-shadow: inset 0 1px 2px rgba(16, 24, 40, .05);
   overflow-x: auto; scrollbar-width: none;
 }
 .nav::-webkit-scrollbar { display: none; }
-/* 六个入口各用一组渐变：文字、图标与底色同色系，互不混淆 */
+/* 六个入口各用一组渐变：文字、图标与选中光晕同色系，互不混淆 */
 .nav a {
   --c1: #1D4ED8;
   --c2: #0369A1;
-  --tint: color-mix(in srgb, var(--c1) 9%, transparent);
-  --tint2: color-mix(in srgb, var(--c2) 5%, transparent);
-  --tint-strong: color-mix(in srgb, var(--c1) 16%, transparent);
-  --tint2-strong: color-mix(in srgb, var(--c2) 8%, transparent);
-  --edge: color-mix(in srgb, var(--c1) 26%, transparent);
+  --edge: color-mix(in srgb, var(--c1) 20%, #E4EAF2);
   position: relative;
   display: inline-flex; align-items: center; gap: 6px;
   font-size: 13px; font-weight: 500; color: var(--c1); text-decoration: none;
   padding: 8px 13px; border: 1px solid transparent; border-radius: 10px;
-  background: linear-gradient(135deg, var(--tint), var(--tint2));
-  white-space: nowrap;
-  transition: background .16s, border-color .16s, box-shadow .16s;
+  background: transparent;
+  white-space: nowrap; opacity: .82;
+  transition: background .16s, border-color .16s, box-shadow .16s, opacity .16s;
 }
 .nav a[data-tone="company"] { --c1: #1D4ED8; --c2: #0369A1; }
 .nav a[data-tone="policy"] { --c1: #6D28D9; --c2: #7E22CE; }
@@ -177,18 +177,22 @@ onBeforeUnmount(() => {
     -webkit-text-fill-color: transparent;
   }
 }
-.nav a :deep(.nav-icon) { opacity: .86; transition: opacity .16s; }
+.nav a :deep(.nav-icon) { opacity: .8; transition: opacity .16s; }
 .nav a:hover :deep(.nav-icon), .nav a.on :deep(.nav-icon) { opacity: 1; }
-.nav a:hover, .nav a.on {
-  background: linear-gradient(135deg, var(--tint-strong), var(--tint2-strong));
-  border-color: var(--edge);
-  box-shadow: 0 3px 10px var(--tint);
+.nav a:hover, .nav a.on { opacity: 1; }
+.nav a:hover {
+  background: rgba(255, 255, 255, .74);
+  border-color: rgba(226, 232, 240, .95);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .04);
 }
-.nav a.on { font-weight: 600; }
-.nav a.on::after {
-  content: '';
-  position: absolute; left: 13px; right: 13px; bottom: 3px; height: 2px;
-  border-radius: 2px; background: linear-gradient(90deg, var(--c1), var(--c2));
+.nav a.on {
+  background: #fff;
+  border-color: var(--edge);
+  box-shadow:
+    0 1px 1px rgba(16, 24, 40, .04),
+    0 8px 18px -10px color-mix(in srgb, var(--c1) 70%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, .95);
+  font-weight: 600;
 }
 .nav a:focus-visible { outline: 2px solid var(--c1); outline-offset: 2px; }
 @media (max-width: 1180px) {
@@ -197,7 +201,7 @@ onBeforeUnmount(() => {
   .hstate { grid-column: 2; }
   .nav {
     grid-column: 1 / -1; justify-self: stretch; justify-content: flex-start;
-    padding-bottom: 2px; border-top: 1px solid #F0F3F7; padding-top: 5px;
+    border-radius: 12px;
   }
   .nav a { padding: 6px 11px; font-size: 12.5px; }
   .task-id { display: none; }

@@ -181,6 +181,34 @@ textarea { line-height: 1.7; }
 @keyframes sp { to { transform: rotate(360deg); } }
 
 .pill { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #F1F4F8; color: var(--sub); white-space: nowrap; }
+
+/* 页面内标签：外层浅底轨道，内层白底胶囊，与顶栏导航同一套视觉语言 */
+.seg {
+  display: flex; gap: 2px; align-items: center; padding: 4px;
+  border-radius: 12px; overflow-x: auto; scrollbar-width: none;
+  background: linear-gradient(180deg, #F8FAFD, #F1F4F9);
+  border: 1px solid rgba(226, 232, 240, .95);
+  box-shadow: inset 0 1px 2px rgba(16, 24, 40, .05);
+}
+.seg::-webkit-scrollbar { display: none; }
+.seg-i {
+  display: inline-flex; align-items: center; gap: 5px; flex: none;
+  padding: 7px 14px; border: 1px solid transparent; border-radius: 9px;
+  font-size: 13px; font-weight: 500; color: var(--sub); white-space: nowrap;
+  cursor: pointer; user-select: none;
+  transition: background .16s, border-color .16s, box-shadow .16s, color .16s;
+}
+.seg-i:hover { color: var(--ink); background: rgba(255, 255, 255, .72); }
+.seg-i.on {
+  color: var(--accent); font-weight: 600; background: #fff; border-color: var(--accent-line);
+  box-shadow: 0 1px 1px rgba(16, 24, 40, .04), 0 8px 18px -12px rgba(31, 102, 208, .5);
+}
+.seg-n {
+  font-size: 10.5px; padding: 1px 6px; border-radius: 999px;
+  background: #EEF1F5; color: var(--mute);
+}
+.seg-i.on .seg-n { background: var(--accent-soft); color: var(--accent); }
+.seg.fill .seg-i { flex: 1 1 0; justify-content: center; }
 .conf { font-family: var(--mono); font-size: 12px; }
 .conf.hi { color: var(--ok); }
 .conf.mid { color: var(--warn); }

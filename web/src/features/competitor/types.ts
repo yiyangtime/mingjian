@@ -21,6 +21,7 @@ export interface Monitor {
   name: string
   code?: string
   market?: string
+  credit_code?: string
   type_label?: string
   industry?: string
   business?: string
@@ -38,6 +39,10 @@ export interface ProfileResp {
   industry: string
   main_business: string
   region: string
+  credit_code?: string
+  reg_status?: string
+  reg_capital?: string
+  establish_date?: string
   source: string
 }
 
@@ -47,9 +52,13 @@ export interface SearchItem {
   market?: string
   column?: string
   delisted?: boolean
-  /** listed=证券主体；local=本地档案；news=资讯线索（多为非上市） */
-  source?: 'listed' | 'local' | 'news'
+  /** listed=证券主体；registry=工商登记；local=本地档案；news=资讯线索；manual=按输入名称建档 */
+  source?: 'listed' | 'registry' | 'local' | 'news' | 'manual'
   hint?: string
+  credit_code?: string
+  reg_status?: string
+  reg_capital?: string
+  establish_date?: string
 }
 
 export interface Candidate {

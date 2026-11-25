@@ -211,6 +211,25 @@ TABLES: tuple[Table, ...] = (
         indexes=(("idx_memory_scope", ("scope",)), ("idx_memory_kind", ("kind",))),
     ),
     Table(
+        "companies",
+        cols=(
+            Col("key", pk=True),                    # 归一化企业名
+            Col("name"),
+            Col("credit_code", length=64),          # 统一社会信用代码
+            Col("legal_person"),
+            Col("reg_capital"),
+            Col("reg_status"),
+            Col("establish_date"),
+            Col("location", "text"),
+            Col("industry"),
+            Col("business", "long"),
+            Col("source"),                          # 工商接口标识
+            Col("raw", "long"),                     # 上游原文，便于字段映射排错
+            Col("fetched_at"),
+        ),
+        indexes=(("idx_company_name", ("name",)), ("idx_company_code", ("credit_code",))),
+    ),
+    Table(
         "settings",
         cols=(
             Col("key", pk=True),                    # 配置键，如 llm

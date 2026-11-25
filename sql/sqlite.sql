@@ -153,6 +153,26 @@ CREATE INDEX IF NOT EXISTS idx_memory_scope ON memory (scope);
 
 CREATE INDEX IF NOT EXISTS idx_memory_kind ON memory (kind);
 
+CREATE TABLE IF NOT EXISTS companies (
+  key TEXT PRIMARY KEY,
+  name TEXT,
+  credit_code TEXT,
+  legal_person TEXT,
+  reg_capital TEXT,
+  reg_status TEXT,
+  establish_date TEXT,
+  location TEXT,
+  industry TEXT,
+  business TEXT,
+  source TEXT,
+  raw TEXT,
+  fetched_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_company_name ON companies (name);
+
+CREATE INDEX IF NOT EXISTS idx_company_code ON companies (credit_code);
+
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,

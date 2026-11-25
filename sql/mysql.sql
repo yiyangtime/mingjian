@@ -146,6 +146,24 @@ CREATE TABLE IF NOT EXISTS `memory` (
   KEY `idx_memory_kind` (`kind`)
 );
 
+CREATE TABLE IF NOT EXISTS `companies` (
+  `key` VARCHAR(255) PRIMARY KEY,
+  `name` VARCHAR(255),
+  `credit_code` VARCHAR(64),
+  `legal_person` VARCHAR(255),
+  `reg_capital` VARCHAR(255),
+  `reg_status` VARCHAR(255),
+  `establish_date` VARCHAR(255),
+  `location` TEXT,
+  `industry` VARCHAR(255),
+  `business` LONGTEXT,
+  `source` VARCHAR(255),
+  `raw` LONGTEXT,
+  `fetched_at` VARCHAR(255),
+  KEY `idx_company_name` (`name`),
+  KEY `idx_company_code` (`credit_code`)
+);
+
 CREATE TABLE IF NOT EXISTS `settings` (
   `key` VARCHAR(255) PRIMARY KEY,
   `value` LONGTEXT NOT NULL,

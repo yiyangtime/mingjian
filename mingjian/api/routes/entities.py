@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, Body, HTTPException
 
 from ...core.textproc import similarity
-from ...infra import store
+from ...infra import registry, store
 from ...infra.sources import cninfo, eastmoney
 from ...runtime import compare
 from ...services import discover, subject
@@ -54,12 +54,48 @@ def _local_matches(q: str, limit: int) -> list[dict]:
     return out
 
 
+def _registry_matches(q: str, limit: int) -> tuple[list[dict], str]:
+    """工商登记：本地缓存优先，未配接口或缓存不足时再查正式 API。
+
+    接口按次计费，本地命中过半就不再消耗额度；上游失败只降级并记一句
+    提示，不能让工商接口的可用性决定搜索能不能用。
+    """
+    out: list[dict] = []
+
+    def add(row: dict) -> None:
+        name = str(row.get("name") or "").strip()
+        if not name or len(out) >= limit:
+            return
+        if any(_same_entity(name, x["name"]) for x in out):
+            return
+        hint = " · ".join(x for x in (str(row.get("reg_status") or ""),
+                                       str(row.get("reg_capital") or "")) if x)
+        out.append({"name": name, "code": "", "market": "", "source": "registry",
+                    "hint": hint or "工商登记",
+                    "credit_code": row.get("credit_code") or "",
+                    "reg_status": row.get("reg_status") or "",
+                    "reg_capital": row.get("reg_capital") or "",
+                    "establish_date": row.get("establish_date") or ""})
+
+    for row in store.search_companies(q, limit):
+        add(dict(row))
+    if len(out) >= limit or not registry.enabled():
+        return out, ""
+    meta: dict = {}
+    for row in registry.search(q, limit=limit, meta=meta):
+        add(row)
+    if meta.get("status") == "error":
+        return out, f"工商接口暂时不可用（{meta.get('error')}）；已退回家档案与资讯线索"
+    return out, ""
+
+
 @router.get("/api/entity/search")
 def entity_search(q: str = "", limit: int = 8):
-    """公司搜索：上市公司库 + 本地档案 + 公开资讯主体。
+    """公司搜索：工商登记 + 上市公司库 + 本地档案 + 公开资讯主体。
 
-    非上市公司不在巨潮的证券主体库里，从资讯报道里反查是公开渠道下唯一
-    可行的路；两路都取不到时，前端仍允许按输入名称直接建档。
+    工商接口配置后能覆盖各类合法登记企业；没有配置时保持原行为：上市
+    公司走证券主体库，非上市从资讯报道与本地档案反查。两路都取不到时，
+    仍额外返回一条“按输入名称建档”的候选，让搜索框本身就是入口。
     """
     q = q.strip()
     if not q:
@@ -68,8 +104,10 @@ def entity_search(q: str = "", limit: int = 8):
     with ThreadPoolExecutor(max_workers=2) as pool:
         listed_f = pool.submit(cninfo.search, q, limit)
         clue_f = pool.submit(discover.clues, q, min(6, limit))
+        reg_f = pool.submit(_registry_matches, q, limit)
         listed = listed_f.result() or []
         clues = clue_f.result() or []
+        reg_items, reg_note = reg_f.result()
 
     items: list[dict] = []
     for it in listed:
@@ -77,6 +115,12 @@ def entity_search(q: str = "", limit: int = 8):
         if not name or any(_same_entity(name, x["name"]) for x in items):
             continue
         items.append({**it, "source": "listed"})
+    for it in reg_items:
+        if len(items) >= limit:
+            break
+        if any(_same_entity(it["name"], x["name"]) for x in items):
+            continue
+        items.append(it)
     for it in _local_matches(q, limit):
         if any(_same_entity(it["name"], x["name"]) for x in items):
             continue
@@ -91,7 +135,16 @@ def entity_search(q: str = "", limit: int = 8):
             continue
         items.append({"name": name, "code": "", "market": "", "source": "news",
                       "hint": it.get("hint") or ""})
-    return {"items": items[:limit]}
+
+    # 证券库与资讯都取不到时，输入词本身仍可建档。保留这一条，搜索框
+    # 才是一个完整入口；否则非上市主体只能靠用户自己找到隐藏的添加按钮。
+    if len(q) >= 2 and not any(_same_entity(str(x.get("name") or ""), q) for x in items):
+        manual = {"name": q, "code": "", "market": "", "source": "manual",
+                  "hint": "未收录，按输入名称建档"}
+        if len(items) >= limit:
+            items = items[:limit - 1]
+        items.append(manual)
+    return {"items": items[:limit], "notes": [reg_note] if reg_note else []}
 
 
 @router.get("/api/entity/profile")
@@ -115,6 +168,8 @@ def entity_profile(name: str = "", code: str = "", market: str = ""):
     sub: dict = {}
     if not prof.get("industry") and not prof.get("main_business"):
         sub = subject.get(name or short) or {}
+    # 非上市主体：本地缓存或工商接口能给出信用代码、法人、注册资本与经营范围
+    reg = {} if code else (registry.resolve(name or short) or {})
 
     if code:
         if len(code) == 5 or "港" in market:
@@ -125,18 +180,29 @@ def entity_profile(name: str = "", code: str = "", market: str = ""):
             type_label = "上市公司 · A股"
     else:
         type_label = "非上市企业"
+    sources = []
+    if prof.get("industry") or prof.get("main_business"):
+        sources.append("公开档案")
+    if reg:
+        sources.append("工商登记")
+    if sub:
+        sources.append("企业自述档案")
     out = {
         "name": prof.get("short_name") or short or name,
-        "full_name": prof.get("full_name") or sub.get("name") or "",
+        "full_name": prof.get("full_name") or sub.get("name") or reg.get("name") or "",
         "code": code,
         "market": market,
         "type_label": type_label,
         "listed": bool(code),
-        "industry": prof.get("industry") or sub.get("industry") or "",
-        "main_business": prof.get("main_business") or sub.get("products") or "",
-        "region": prof.get("address") or sub.get("region") or "",
-        "source": "公开档案" if (prof.get("industry") or prof.get("main_business"))
-        else ("企业自述档案" if sub else ""),
+        "industry": prof.get("industry") or reg.get("industry") or sub.get("industry") or "",
+        "main_business": (prof.get("main_business") or sub.get("products")
+                           or reg.get("business") or ""),
+        "region": prof.get("address") or sub.get("region") or reg.get("location") or "",
+        "credit_code": reg.get("credit_code") or "",
+        "reg_status": reg.get("reg_status") or "",
+        "reg_capital": reg.get("reg_capital") or "",
+        "establish_date": reg.get("establish_date") or "",
+        "source": " · ".join(sources),
     }
     # 取不到任何字段时不缓存，避免自述档案后补后仍然命中空结果
     if out["industry"] or out["main_business"]:

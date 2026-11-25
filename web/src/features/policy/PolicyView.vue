@@ -825,8 +825,10 @@ onBeforeUnmount(() => {
 
       <div class="card table-card">
         <div class="tabs">
-          <div class="tab" :class="{ on: curTab === 'ok' }" @click="curTab = 'ok'">抽取结果<span class="cnt">{{ docs.length }}</span></div>
-          <div class="tab" :class="{ on: curTab === 'issue' }" @click="curTab = 'issue'">异常与复核<span class="cnt">{{ issues.length }}</span></div>
+          <div class="seg">
+            <div class="seg-i" :class="{ on: curTab === 'ok' }" @click="curTab = 'ok'">抽取结果<span class="seg-n">{{ docs.length }}</span></div>
+            <div class="seg-i" :class="{ on: curTab === 'issue' }" @click="curTab = 'issue'">异常与复核<span class="seg-n">{{ issues.length }}</span></div>
+          </div>
         </div>
         <div class="tblwrap">
           <table v-if="curTab === 'ok'">
@@ -1105,23 +1107,9 @@ onBeforeUnmount(() => {
 .stat .v.a { color: #D97706; }
 
 .table-card { padding: 0; border: none; background: transparent; box-shadow: none; }
-.tabs {
-  display: flex; gap: 2px; padding: 0 18px; background: #fff;
-  border: 1px solid var(--line); border-bottom: 1px solid var(--line);
-  border-radius: var(--radius) var(--radius) 0 0;
-}
-.tab {
-  padding: 13px 16px; font-size: 13.5px; color: #6B7280; cursor: pointer;
-  border-bottom: 2px solid transparent; margin-bottom: -1px; user-select: none;
-}
-.tab.on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 500; }
-.tab .cnt {
-  display: inline-block; background: #F0F2F5; color: #6B7280; border-radius: 8px;
-  font-size: 10.5px; padding: 1px 6px; margin-left: 5px;
-}
-.tab.on .cnt { background: #E8F0FB; color: var(--accent); }
+.tabs { display: flex; padding: 0 0 10px; }
 .tblwrap {
-  background: #fff; border: 1px solid var(--line); border-top: none; border-radius: 0 0 var(--radius) var(--radius);
+  background: #fff; border: 1px solid var(--line); border-radius: var(--radius);
   overflow: auto; max-height: 520px; box-shadow: var(--shadow-card);
 }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
