@@ -398,7 +398,7 @@ def _call(prof, keyword: str, page: int, size: int) -> tuple[list[dict], str, st
 
     items = _dig(data, str(prof.get("items_path") or ""))
     if not isinstance(items, list):
-        return [], "error", "结果路径未命中，请在设置页核对"
+        return [], "error", "结果路径未命中，请在接入中心核对"
     out = [_normalize(x, "registry:" + str(prof.get("preset") or "custom"),
                       prof.get("map") or {})
            for x in items[:size]]

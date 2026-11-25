@@ -18,7 +18,7 @@
 | 零配置 | 不装服务、不建库、不配连接串，`python -m mingjian serve` 就能跑 |
 | 单文件备份 | 停服后复制 `data/mingjian.db` 即完整备份，不需要 DBA 参与 |
 | 写入模式匹配 | 单进程多线程、写少读多；WAL + `synchronous=NORMAL` 已够用 |
-| 可审计 | 十二张表全是普通表，没有存储过程与触发器，`sqlite3` 命令行即可查证 |
+| 可审计 | 十三张表全是普通表，没有存储过程与触发器，`sqlite3` 命令行即可查证 |
 
 代价也要写清楚：**并发写入上限就是单进程**；库大了以后 `VACUUM` 会短暂锁表；
 多实例部署必须换库（见第七节）。
@@ -55,7 +55,7 @@ CREATE DATABASE mingjian CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 MINGJIAN_DB_URL=mysql://user:pass@127.0.0.1:3306/mingjian
 ```
 
-留空或删掉即回到 `data/mingjian.db`。密码在系统状态页、`mingjian db` 输出与日志里
+留空或删掉即回到 `data/mingjian.db`。密码在运行治理页、`mingjian db` 输出与日志里
 都会隐去，只显示 `user:***@host`。
 
 ### 4. 建表
@@ -144,8 +144,8 @@ python tools/dbinit.py --dialect postgres --stdout    # 只看不写
 
 ## 六、验证到什么程度
 
-- **SQLite**：全链路实测——自测 37 项、服务启动冒烟、`dbinit.py --check`
-  比对 12 张表 / 18 个索引。
+- **SQLite**：全链路实测——自测 54 项、服务启动冒烟、`dbinit.py --check`
+  比对 13 张表 / 21 个索引。
 - **PostgreSQL / MySQL**：DDL、占位符转译、保留字与百分号处理都有单元断言，
   但**没有在真实实例上跑过**（开发机没有这两个服务）。首次接库请务必
   `tools/dbcheck.py --init`；失败会打印方言、目标、版本与具体错误。

@@ -37,12 +37,20 @@
 ### 方式一：源码运行（推荐）
 
 ```bash
-git clone https://github.com/yiyangtime/mingjian.git && cd mingjian
+git clone https://github.com/yiyangtime/mingjian.git
+cd mingjian
+python -m venv .venv                          # 项目依赖只装进 .venv
+# Windows: .venv\Scripts\activate
+# macOS / Linux: source .venv/bin/activate
 python -m pip install -r requirements.txt     # 仅 FastAPI + uvicorn
+cd web
+npm ci
+npm run build                                # 生成 web/dist（Node 18+）
+cd ..
 python -m mingjian serve                      # 打开 http://127.0.0.1:8765
 ```
 
-`web/dist` 已随仓库提供，不用装 Node、不用配密钥。输入公司名即可开始。
+`web/dist` 是构建产物，不入库；首次运行需先构建前端。Python 依赖统一装在项目根目录的 `.venv`，不要装到全局环境；不配置模型也能完整运行（规则引擎）。
 
 也可以只用命令行：
 
@@ -69,11 +77,14 @@ docker compose up -d          # http://127.0.0.1:8765
 ### 方式三：作为包安装
 
 ```bash
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+# macOS / Linux: source .venv/bin/activate
 python -m pip install -e ".[dev]"
 mingjian serve
 ```
 
-前端从仓库的 `web/dist` 托管；若删除该目录，需 `cd web && npm ci && npm run build`。
+服务端托管 `web/dist`，首次使用需 `cd web && npm ci && npm run build`；Docker 镜像已内置构建。
 
 ## 七个页面
 
@@ -87,7 +98,7 @@ mingjian serve
 | 运行治理 | `/governance` | 服务运行得怎样、谁改了什么 |
 | 接入中心 | `/access-center` | 接哪家模型、哪家工商接口 |
 
-七个页面共用同一套后端接口，支持深链接：`?run=<编号>`、`?tab=report`、`?fact=F01`。
+七个页面各对应一组后端接口，支持深链接：`?run=<编号>`、`?tab=report`、`?fact=F01`。
 
 公司搜索按「工商登记 → 证券主体库 → 本地档案 → 资讯线索」合并去重，最后仍保留一条
 「按输入名称建档」。工商登记要接一套正式接口（天眼查、企查查、爱企查、启信宝或
@@ -145,7 +156,7 @@ api → runtime → services → infra → core
 - `services`：抽取、分类、归因、成稿、政策解析、检索词版本、离线候选评测、召回评测、
   采集留痕、公告覆盖与深度对照（不感知 HTTP）
 - `runtime`：七步管道、竞品对比、作业队列与断点
-- `api`：九个领域路由、统一错误形状、SPA 托管
+- `api`：七个领域接口（九个路由模块）、统一错误形状、SPA 托管
 
 反向导入会被 `tools/selftest_arch.py` 拦下；前端 `features → shared`，功能之间互不 import。
 详见 [docs/architecture.md](docs/architecture.md)。
@@ -164,7 +175,7 @@ api → runtime → services → infra → core
 | `MINGJIAN_DB_URL` | 空（本地 SQLite） | 可选数据库连接串，见 [docs/database.md](docs/database.md) |
 
 大模型只用于润色「判断段」，事实与引用始终由程序生成并校验；模型返回的编号不在
-事实清单内会被整条丢弃。页面「模型配置」内置 11 家 OpenAI 兼容服务商预设。
+事实清单内会被整条丢弃。接入中心的「模型服务」内置 11 家 OpenAI 兼容服务商预设。
 
 页面里保存的配置与生效项存在同一个数据库的 `settings` 表（键 `llm`），重启自动
 恢复，「停用」也会落库；旧 `config.json` 的 `llm_*` 只在库里还没有配置时迁移一次，
@@ -172,10 +183,12 @@ api → runtime → services → infra → core
 
 ## 开发与测试
 
+以下命令均在项目根目录的 `.venv` 中执行（先按上面的方式激活虚拟环境）：
+
 ```bash
-pip install -e ".[dev]"
+python -m pip install -e ".[dev]"
 ruff check .
-python tools/selftest_all.py        # 43 项断言：抽取 / 归因 / 矩阵 / 政策 / 调度 / 落库 / 方言 / 离线优化
+python tools/selftest_all.py        # 54 项断言：抽取 / 归因 / 矩阵 / 政策 / 调度 / 落库 / 官网 / 方言 / 离线优化
 python tools/selftest_arch.py       # 分层边界、路由唯一性、前端隔离、视图体积棘轮
 python -m mingjian db --counts      # 当前数据库、版本与各表行数
 cd web && npm ci && npm run build   # vue-tsc 类型检查 + 构建
@@ -190,6 +203,8 @@ Node 20 上跑同样的门禁，并做一次服务冒烟。
 |---|---|
 | 巨潮资讯 | 上市公司公告列表与公告 PDF |
 | 东方财富 | 公司档案、主营构成、定期指标、资讯检索 |
+| 百度资讯 | 东方财富资讯检索失败时的首屏回退 |
+| 企业工商登记（可配置） | 企业检索、信用代码、法人、注册资本、经营状态与官网 |
 | 工业和信息化部及省级工信主管部门官网 | 产业政策、专项资金等公告 |
 
 内置同域请求间隔（默认 0.45 秒）、超时与重试；不含验证码识别、登录态伪造、
@@ -229,7 +244,7 @@ Node 20 上跑同样的门禁，并做一次服务冒烟。
 
 ```text
 mingjian/            后端包（core / infra / services / runtime / api / cli / server）
-web/                 前端（Vue 3 + TypeScript + Vite，dist 随仓库分发）
+web/                 前端（Vue 3 + TypeScript + Vite，dist 为本地构建产物）
 tools/               自测、架构门禁与离线评测样例
 docs/                architecture / methodology / data-sources / policy-import / database / optimizer
 sql/                 SQLite / PostgreSQL / MySQL 初始化脚本（由表结构定义生成）

@@ -67,7 +67,7 @@ mingjian/                    后端包
 ├── api/
 │   ├── app.py               应用装配、中间件、统一错误形状、SPA 托管
 │   ├── deps.py              跨路由共享依赖
-│   └── routes/              九个领域路由
+│   └── routes/              七个领域接口（九个路由模块）
 ├── cli.py                   命令行
 ├── server.py                uvicorn 启动器
 └── __main__.py              支持 python -m mingjian
@@ -192,7 +192,7 @@ SQL。表结构在 `infra/schema.py` 里定义一份，可渲染成三种方言�
 | 改判定规则 | `services/` | 必须同时加断言到 `tools/selftest_all.py`；分类词表候选走 `optimizer` 的 draft / eval / promote 门禁 |
 | 改检索词 | `data/optimizer/search_terms.json` | 2—8 路、每路不超过 40 字；整份覆盖，非法回退基线；逐路召回与被拒条目留痕；尚未纳入门禁 |
 | 接新数据源 | `infra/sources/<源>.py` | 只做取数与归一化，不写业务判断；失败要可降级 |
-| 换工商接口 | 设置页「工商数据源」，或 `infra/registry.py` 的 `PRESETS` | 只改请求形态与字段映射；密钥不写进代码与文档 |
+| 换工商接口 | 接入中心「工商数据源」，或 `infra/registry.py` 的 `PRESETS` | 只改请求形态与字段映射；密钥不写进代码与文档 |
 | 加报告节 | `services/report.py` | 同步 `docs/methodology.md` 与前端渲染 |
 | 加页面 | `web/src/features/<域>/` | 路由表登记；视图行数预算只降不升 |
 | 加技能 | `services/skills.py` | 参数契约 + 白名单；内部步骤只登记不可执行 |

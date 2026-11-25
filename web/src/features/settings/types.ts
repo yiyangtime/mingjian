@@ -1,4 +1,4 @@
-/** 模型配置与系统状态页的本地契约：仅本功能域使用，跨域共享的放 shared/types.ts。 */
+/** 模型配置的本地契约：仅本功能域使用，跨域共享的放 shared/types.ts。 */
 
 export interface Provider {
   id: string

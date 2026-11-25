@@ -8,14 +8,18 @@
 | 项 | 要求 |
 |---|---|
 | Python | 3.10+（CI 跑 3.12） |
+| 虚拟环境 | 项目根目录 `.venv`，依赖只装这里，不使用全局 Python |
 | Node | 18+（仅改前端时需要，CI 跑 20） |
-| 运行时依赖 | `pip install -r requirements.txt` |
-| 开发依赖 | `pip install -e ".[dev]"` |
+| 运行时依赖 | `.venv` 中 `python -m pip install -r requirements.txt` |
+| 开发依赖 | `.venv` 中 `python -m pip install -e ".[dev]"` |
 
 ```bash
 git clone https://github.com/yiyangtime/mingjian.git
 cd mingjian
-pip install -e ".[dev]"
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+# macOS / Linux: source .venv/bin/activate
+python -m pip install -e ".[dev]"
 python -m mingjian serve          # http://127.0.0.1:8765
 ```
 
@@ -30,13 +34,16 @@ npm run build                     # vue-tsc + 产出 dist，服务端直接托�
 
 ## 二、提交前必须通过的门禁
 
+以下命令均在已激活的 `.venv` 中执行：
+
 ```bash
 ruff check .
-python tools/selftest_all.py      # 33 项断言，含架构边界与前端体积棘轮
+python tools/selftest_all.py      # 54 项断言
+python tools/selftest_arch.py     # 分层边界、路由唯一性与前端体积棘轮
 cd web && npm run build           # 类型检查 + 构建
 ```
 
-三项都过再开 PR。CI 会重复执行同样的命令。
+四项都过再开 PR。CI 会重复执行同样的命令。
 
 ## 三、改哪里：分层边界
 

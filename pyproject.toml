@@ -57,9 +57,6 @@ include-package-data = true
 [tool.setuptools.packages.find]
 include = ["mingjian*"]
 
-[tool.setuptools.package-data]
-mingjian = ["ui.html"]
-
 [tool.ruff]
 line-length = 120
 target-version = "py310"

@@ -1,6 +1,6 @@
 """
 持久层。默认连本地 SQLite，可通过 db_url 切到 PostgreSQL / MySQL：
-十二张表对应需求文档里"可追溯"的最小集合：
+十三张表对应需求文档里"可追溯"的最小集合：
 
 entities    公司实体（一次解析，长期复用）
 runs        每次运行的元信息（谁、何时、参数、统计）
@@ -405,7 +405,7 @@ def reconcile_interrupted_runs() -> int:
 
 
 def table_counts() -> dict:
-    """各表行数，供系统状态页展示；单表损坏不影响其它表。"""
+    """各表行数，供运行治理页展示；单表损坏不影响其它表。"""
     out = {}
     for name in ("entities", "runs", "documents", "facts", "snapshots", "audit",
                  "run_events", "checkpoints", "schedules", "subjects", "memory",
@@ -450,7 +450,7 @@ def search_companies(q: str, limit: int = 8):
 
 
 def company_stats() -> dict:
-    """缓存规模与最近抓取时间，供设置页展示。"""
+    """缓存规模与最近抓取时间，供接入中心展示。"""
     row = conn().execute(
         "SELECT COUNT(*) AS n, COALESCE(MAX(fetched_at),'') AS last FROM companies").fetchone()
     return {"total": int(row["n"] if row else 0), "last_at": str(row["last"] if row else "")}
