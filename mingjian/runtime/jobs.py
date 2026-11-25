@@ -56,6 +56,8 @@ def _result_from_db(rid: str) -> dict | None:
             "amount": row.get("amount") or "", "event_date": row.get("event_date") or "",
             "confidence": float(row.get("confidence") or 0),
             "corroboration": int(row.get("corroboration") or 1),
+            "conflict": int(row.get("conflict") or 0),
+            "conflict_note": row.get("conflict_note") or "",
             "source": doc.get("source") or "", "url": doc.get("url") or "",
             "published_at": doc.get("published_at") or "",
             "evidence_level": doc.get("evidence_level") or "",

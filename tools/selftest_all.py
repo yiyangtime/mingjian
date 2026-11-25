@@ -15,6 +15,7 @@
 
 纯函数为主，不依赖网络；联网链路由 API 冒烟另行验证。
 """
+# ruff: noqa: E402  —— 先插 sys.path 再导入本地包
 import pathlib
 import subprocess
 import sys
@@ -22,11 +23,12 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from mingjian.core import context  # noqa: E402
-from mingjian.infra import llmcfg, scheduler, store  # noqa: E402
-from mingjian.infra.sources import cninfo  # noqa: E402
-from mingjian.runtime import compare  # noqa: E402
-from mingjian.services import discover, extract, govpolicy, memory, metrics, optimizer, skills, subject, topic  # noqa: E402
+from mingjian.config import CFG
+from mingjian.core import context, verify
+from mingjian.infra import llm, llmcfg, push, scheduler, store
+from mingjian.infra.sources import cninfo
+from mingjian.runtime import compare
+from mingjian.services import discover, extract, govpolicy, memory, metrics, optimizer, report, skills, subject, topic
 
 CASES = []
 
@@ -305,6 +307,164 @@ def _market_noise_gate():
     assert extract.build_fact(doc, {"某某谐波"}) is None
 
 
+@case("判断保真：改写句的数字与单位必须能在引用事实中找到")
+def _judge_support():
+    fact = {"statement": "拟投资5亿元建设生产基地", "evidence_quote": "项目总投资5亿元",
+            "amount": "5亿元", "event_date": "2026-03-01"}
+    src = [" ".join(str(fact.get(k) or "") for k in
+                    ("statement", "evidence_quote", "amount", "event_date"))]
+    ok = verify.support("产能端动作密集（本期 3 条），拟投资5亿元建设基地。", src,
+                        baseline="产能端动作明显密集（本期 3 条）。")
+    assert ok["ok"] and ok["coverage"] > 0.2, ok
+    bad = verify.support("公司拟投资8亿元建设生产基地。", src)
+    assert not bad["ok"] and "8亿元" in bad["reason"], bad
+    # 中文数字不能绕过：八亿元 ≠ 5亿元，但八亿元 = 8亿元 = 80000万元
+    cn = verify.support("公司拟投资八亿元建设生产基地。", src)
+    assert not cn["ok"] and "8亿" in cn["reason"], cn
+    assert verify.figures("八亿元") == verify.figures("8亿元") == verify.figures("80000万元")
+    assert verify.figures("毛利率提升五个百分点") == verify.figures("毛利率提升5个百分点")
+    assert verify.figures("同比增五成") == verify.figures("同比增50%")
+    # 单位被改等同改事实：5亿元 → 5万元 也要拦下
+    bad2 = verify.support("公司拟投资5万元建设生产基地。", src)
+    assert not bad2["ok"], bad2
+    # 整句替换成没有事实支撑的判断，也不能放行
+    vague = verify.support("公司经营一切正常。", src)
+    assert not vague["ok"], vague
+    # 金额写法不同但等值（5亿元 = 50000万元），不应误报冲突
+    assert verify.figures("5亿元") == verify.figures("50000万元")
+
+
+@case("判断保真：否定、方向与新增子句都不得改写")
+def _judge_semantic_guard():
+    cap = ["公司尚未扩产 公司尚未扩产 2026-03-01"]
+    flipped = verify.support("公司已扩产，产能提升。", cap,
+                             baseline="公司尚未扩产，产能维持不变。")
+    assert not flipped["ok"] and "否定" in flipped["reason"], flipped
+    price = ["毛利率同比下降5个百分点 毛利率同比下降5个百分点 2026-03-01"]
+    up = verify.support("毛利率同比上升5个百分点。", price,
+                        baseline="毛利率同比下降5个百分点。")
+    assert not up["ok"] and "方向" in up["reason"], up
+    extra = verify.support("公司尚未扩产，产能维持不变，并已拿到海外大单。", cap,
+                           baseline="公司尚未扩产，产能维持不变。")
+    assert not extra["ok"] and "子句" in extra["reason"], extra
+
+
+@case("判断润色：任一条未过校验就整批回退规则判断")
+def _polish_policy():
+    draft = [{"text": "规则 A", "citations": ["F01"], "conf": 0.6},
+             {"text": "规则 B", "citations": ["F02"], "conf": 0.5}]
+    good = {"judgments": [dict(draft[0], text="改写 A", source="llm"),
+                          dict(draft[1], text="改写 B", source="llm")],
+            "rejected": [], "requested": 2, "accepted": 2}
+    final, meta = report.apply_polish(draft, good)
+    assert final[0]["source"] == "llm" and meta["llm"] == 2 and not meta["fallback"], meta
+    bad = {"judgments": [dict(draft[0], text="改写 A", source="llm")],
+           "rejected": [{"text": "改写 B", "reason": "出现引用事实中没有的数字：8亿元"}],
+           "requested": 2, "accepted": 1}
+    final, meta = report.apply_polish(draft, bad)
+    assert final == draft and meta["llm"] == 0 and "整批回退" in meta["fallback"], meta
+    # 条数对上、引用合法但被挪到别条：同样整批回退
+    swapped = {"judgments": [dict(draft[0], text="改写 A", citations=["F02"], source="llm"),
+                             dict(draft[1], text="改写 B", citations=["F01"], source="llm")],
+               "rejected": [], "requested": 2, "accepted": 2}
+    final, meta = report.apply_polish(draft, swapped)
+    assert final == draft and "引用" in meta["fallback"], meta
+
+
+@case("判断润色：事实清单只装被引用事实，引用事实不会被预算截断")
+def _polish_prompt_scope():
+    long = "本公司拟投资建设生产基地并扩大产能" * 20
+    facts = [{"id": f"F{i:02d}", "type": "capacity", "type_label": "产能建设",
+              "statement": long, "evidence_quote": "", "amount": "",
+              "event_date": "2026-03-01", "confidence": 0.9} for i in range(1, 30)]
+    facts.append({"id": "F30", "type": "risk", "type_label": "风险提示",
+                  "statement": "公司尚未披露诉讼进展", "evidence_quote": "",
+                  "amount": "", "event_date": "2026-03-01", "confidence": 0.5})
+    draft = [{"text": "公司尚未披露诉讼进展，风险需跟踪。", "citations": ["F30"], "conf": 0.5}]
+
+    seen = {}
+    old_chat = llm.chat
+    old_cfg = (CFG.llm_base, CFG.llm_key, CFG.llm_model)
+
+    def fake_chat(messages, **kwargs):
+        seen["prompt"] = "\n".join(m["content"] for m in messages)
+        return ('[{"index":1,"text":"公司尚未披露诉讼进展，风险需跟踪。",'
+                '"citations":["F30"]}]')
+
+    llm.chat = fake_chat
+    CFG.llm_base, CFG.llm_key, CFG.llm_model = "https://example.invalid/v1", "sk-test", "test-model"
+    try:
+        out = llm.polish_judgments(draft, facts)
+    finally:
+        llm.chat = old_chat
+        CFG.llm_base, CFG.llm_key, CFG.llm_model = old_cfg
+
+    assert out and out["accepted"] == 1 and not out["rejected"], out
+    # 29 条长事实一起装会超 6000 预算被截掉；按引用过滤后 F30 一定在场、F01 不应出现
+    block = seen["prompt"].split("事实清单：", 1)[1].split("待改写判断：", 1)[0]
+    assert "F30" in block and "公司尚未披露诉讼进展" in block, block
+    assert "F01" not in block, block
+
+
+@case("跨源冲突：金额不一致时标记冲突并下调置信度")
+def _merge_conflict():
+    def fact(amount: str, conf: float, doc: str, statement: str) -> extract.Fact:
+        return extract.Fact(type="capacity", type_label="产能建设", statement=statement,
+                            evidence_quote=statement, amount=amount, event_date="2026-03-01",
+                            confidence=conf, dedupe_key=statement[:8], doc_id=doc)
+
+    merged = extract.merge_facts([
+        fact("5亿元", 0.90, "D1", "公司拟投资5亿元建设江苏生产基地"),
+        fact("8亿元", 0.86, "D2", "公司拟投资8亿元建设江苏生产基地")])
+    assert len(merged) == 1, merged
+    f = merged[0]
+    assert f.corroboration == 1 and f.conflict == 1, f
+    assert "5亿元" in f.conflict_note and "8亿元" in f.conflict_note, f.conflict_note
+    assert f.confidence < 0.90, f.confidence       # 冲突要扣分，不能当互证加分
+
+    # 同一指标族分别比对：金额相同、产能不同也算冲突（旧实现会漏报）
+    mix = extract.merge_facts([
+        fact("5亿元", 0.90, "D1", "公司拟投资5亿元建设基地，新增产能10万吨"),
+        fact("5亿元", 0.86, "D2", "公司拟投资5亿元建设基地，新增产能8万吨")])
+    assert mix[0].conflict == 1 and "8万吨" in mix[0].conflict_note, mix[0]
+
+    same = extract.merge_facts([
+        fact("5亿元", 0.90, "D1", "公司拟投资5亿元建设江苏生产基地"),
+        fact("5亿元", 0.86, "D2", "公司拟投资5亿元建设江苏生产基地")])
+    assert same[0].conflict == 0 and same[0].corroboration == 2, same[0]
+
+
+@case("报告：口径冲突与判断留痕在正文可见")
+def _report_conflict_marks():
+    facts = [{"id": "F01", "type": "capacity", "type_label": "产能建设",
+              "statement": "拟投资5亿元建设基地", "evidence_quote": "总投资5亿元",
+              "amount": "5亿元", "event_date": "2026-03-01", "confidence": 0.84,
+              "corroboration": 2, "conflict": 1,
+              "conflict_note": "D1 记 5亿元，D2 记 8亿元", "doc_id": "D1",
+              "source": "巨潮", "url": "https://example.com/a",
+              "published_at": "2026-03-02", "evidence_level": "full"}]
+    changes = {"has_baseline": False, "baseline_count": 0, "new": [],
+               "escalated": [], "faded": []}
+    judges = [{"text": "产能扩张在推进。", "citations": ["F01"], "conf": 0.7,
+               "source": "llm", "support": 0.45}]
+    md = report.render_markdown(
+        company="某某科技", entity={"code": "000001"}, profile={}, quote={},
+        facts=facts, docs=[], changes=changes,
+        gaps_list=report.gaps(facts, [], changes, {"code": "000001"}),
+        sug=[], judges=judges,
+        run_meta={"run_id": "R1", "model_used": "test-model"},
+        judge_meta={"rule": 1, "llm": 1, "rejected": 0, "trail": "judgments_R1.json"})
+    assert "口径冲突 1 处" in md and "5亿元" in md and "8亿元" in md, md
+    assert "判断审计" in md and "judgments_R1.json" in md, md
+    assert "表述重合 45%" in md, md
+    assert "口径冲突（金额或规模不一致）" in "\n".join(
+        report.gaps(facts, [], changes, {"code": "000001"})), "缺口未列出冲突"
+    dropped = [{"statement": "某项目投资5亿元（另有来源记 8亿元）"}]
+    gap_text = "\n".join(report.gaps(facts, [], changes, {"code": "000001"},
+                                    dropped_conflicts=dropped))
+    assert "未进入事实区" in gap_text, gap_text
+
+
 # ---------------------------------------------------------------- 技能与记忆
 
 @case("技能注册表：未知技能、内部技能与参数校验都拒绝")
@@ -578,8 +738,6 @@ def _llm_settings():
     import shutil
     import tempfile
 
-    from mingjian.config import CFG
-
     tmpdir = pathlib.Path(tempfile.mkdtemp(prefix="mingjian_llm_"))
     old_path, old_url, old_conn = store.DB_PATH, store.DB_URL, getattr(store._local, "conn", None)
     old_cfg = (CFG.llm_base, CFG.llm_key, CFG.llm_model, CFG.llm_timeout)
@@ -633,7 +791,7 @@ def _optimizer_gate():
     candidate_path = ROOT / "tools" / "optimizer" / "candidate.example.json"
     optstore.OPT_DIR = tmpdir
     try:
-        cases = optimizer.load_cases(cases_path)
+        optimizer.load_cases(cases_path)  # 加载可用性校验；评估时内部会再读
         report = optimizer.evaluate_file(candidate_path, cases_path)
         assert report["gate"]["passed"], report["gate"]
         assert report["candidate_metrics"]["accuracy"] > report["baseline"]["metrics"]["accuracy"]
@@ -1694,6 +1852,244 @@ def _company_patch_columns():
         store.upsert_company({"key": "某公司", "name": "某公司", "website": "example.com"})
         assert store.get_company("某公司")["website"] == "example.com"
     finally:
+        if getattr(store._local, "conn", None) is not None:
+            store._local.conn.close()
+        store._local.conn, store._ready = old_conn, old_ready
+        store.DB_PATH, store.DB_URL = old_path, old_url
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@case("事实落库：口径冲突字段可回读，旧库自动补列")
+def _fact_conflict_roundtrip():
+    import shutil
+    import sqlite3
+    import tempfile
+
+    tmpdir = pathlib.Path(tempfile.mkdtemp(prefix="mingjian_fact_"))
+    dbp = tmpdir / "old.db"
+    raw = sqlite3.connect(dbp)
+    raw.execute("""CREATE TABLE facts (
+        id TEXT PRIMARY KEY, run_id TEXT, entity_key TEXT, doc_id TEXT, type TEXT,
+        type_label TEXT, statement TEXT, evidence_quote TEXT, amount TEXT,
+        event_date TEXT, confidence REAL, dedupe_key TEXT,
+        corroboration INTEGER DEFAULT 1, created_at TEXT)""")
+    raw.commit()
+    raw.close()
+    old_path, old_url = store.DB_PATH, store.DB_URL
+    old_conn, old_ready = getattr(store._local, "conn", None), store._ready
+    store.DB_PATH, store.DB_URL, store._local.conn = dbp, "", None
+    store._ready = None
+    try:
+        store.init()
+        store.save_facts("R1", "000001", [{
+            "id": "F01", "type": "capacity", "type_label": "产能建设",
+            "statement": "拟投资5亿元建设基地", "confidence": 0.8,
+            "corroboration": 2, "conflict": 1,
+            "conflict_note": "D1 记 5亿元，D2 记 8亿元"}])
+        row = store.facts_of_run("R1")[0]
+        assert int(row["conflict"]) == 1, row
+        assert "5亿元" in (row["conflict_note"] or ""), row
+    finally:
+        if getattr(store._local, "conn", None) is not None:
+            store._local.conn.close()
+        store._local.conn, store._ready = old_conn, old_ready
+        store.DB_PATH, store.DB_URL = old_path, old_url
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@case("判断留痕：入库可回读，旧库自动补列")
+def _judgment_trail_roundtrip():
+    import shutil
+    import sqlite3
+    import tempfile
+
+    tmpdir = pathlib.Path(tempfile.mkdtemp(prefix="mingjian_trail_"))
+    dbp = tmpdir / "old.db"
+    raw = sqlite3.connect(dbp)
+    raw.execute("""CREATE TABLE runs (
+        id TEXT PRIMARY KEY, entity_key TEXT, company TEXT, status TEXT,
+        started_at TEXT, finished_at TEXT, params TEXT, stats TEXT, error TEXT)""")
+    raw.commit()
+    raw.close()
+    old_path, old_url = store.DB_PATH, store.DB_URL
+    old_conn, old_ready = getattr(store._local, "conn", None), store._ready
+    store.DB_PATH, store.DB_URL, store._local.conn = dbp, "", None
+    store._ready = None
+    try:
+        store.init()
+        store.create_run("R1", "000001", "某公司", {})
+        payload = {"run_id": "R1", "model": "test-model", "requested": 1, "accepted": 0,
+                   "rule": [{"text": "规则原句", "citations": ["F01"]}],
+                   "final": [{"text": "规则原句", "citations": ["F01"]}],
+                   "rejected": [{"text": "改写句", "reason": "出现引用事实中没有的数字：8亿元"}]}
+        store.save_judgments("R1", payload)
+        got = store.judgments_of_run("R1")
+        assert got and got["model"] == "test-model", got
+        assert got["rejected"][0]["reason"].endswith("8亿元"), got
+        assert store.judgments_of_run("R404") is None
+    finally:
+        if getattr(store._local, "conn", None) is not None:
+            store._local.conn.close()
+        store._local.conn, store._ready = old_conn, old_ready
+        store.DB_PATH, store.DB_URL = old_path, old_url
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@case("报告推送：配置打码、留空沿用、启停与自动推送门槛")
+def _push_config():
+    import shutil
+    import tempfile
+
+    tmpdir = pathlib.Path(tempfile.mkdtemp(prefix="mingjian_push_"))
+    dbp = tmpdir / "push.db"
+    old_path, old_url = store.DB_PATH, store.DB_URL
+    old_conn, old_ready = getattr(store._local, "conn", None), store._ready
+    store.DB_PATH, store.DB_URL, store._local.conn = dbp, "", None
+    store._ready = None
+    try:
+        store.init()
+        pub = push.public()
+        assert pub["channels"] == [] and not pub["recorded"] and not pub["enabled"], pub
+
+        raw_url = "https://open.feishu.cn/open-apis/bot/v2/hook/abcdef123456"
+        out = push.save_channel({"type": "feishu", "name": "研发群",
+                                 "url": raw_url, "secret": "FeiShuSecret9876"})
+        ch = out["channels"][0]
+        assert ch["url_set"] and ch["url_hint"].endswith("3456"), ch
+        assert ch["secret_hint"] == "…9876", ch
+        # Webhook 地址与密钥按凭证对待：页面拿到的结构里不能出现原文
+        assert raw_url not in repr(out) and "FeiShuSecret9876" not in repr(out)
+        assert out["enabled"] and out["recorded"], out
+
+        # 编辑留空沿用原值，不会被空字符串覆盖
+        out = push.save_channel({"id": ch["id"], "type": "feishu", "name": "研发群二",
+                                 "url": "", "secret": ""})
+        ch2 = out["channels"][0]
+        assert ch2["url_set"] and ch2["secret_set"] and ch2["name"] == "研发群二", ch2
+
+        # 自动推送要求「开关打开 + 至少一个启用渠道」
+        assert not push.auto_enabled()
+        push.set_options(auto=True)
+        assert push.auto_enabled()
+        push.toggle_channel(ch["id"], False)
+        assert not push.auto_enabled() and not push.public()["enabled"]
+        assert push.toggle_channel(ch["id"], True)["enabled"] and push.auto_enabled()
+
+        # 保存即生效：配置落在 settings 表，重启后可读回原文
+        assert store.get_setting(push.SETTING_KEY)["channels"][0]["url"] == raw_url
+
+        # Telegram 缺 Chat ID、非 http(s) 地址都应拒绝
+        for bad in ({"type": "telegram", "name": "TG", "secret": "1:ABC", "chat_id": ""},
+                    {"type": "wecom", "name": "坏地址", "url": "ftp://example.com/hook"}):
+            try:
+                push.save_channel(bad)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"应拒绝非法配置：{bad}")
+
+        out = push.delete_channel(ch["id"])
+        assert out["channels"] == [] and not out["enabled"], out
+    finally:
+        if getattr(store._local, "conn", None) is not None:
+            store._local.conn.close()
+        store._local.conn, store._ready = old_conn, old_ready
+        store.DB_PATH, store.DB_URL = old_path, old_url
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@case("报告推送：各平台消息体、加签与失败隔离")
+def _push_protocol():
+    import base64
+    import hashlib
+    import hmac
+    import shutil
+    import tempfile
+
+    # 飞书 / 钉钉加签：timestamp\nsecret 作 key，空串做 HMAC-SHA256
+    want = base64.b64encode(
+        hmac.new(b"1700000000\nsecret123", b"", hashlib.sha256).digest()).decode()
+    assert push._sign("secret123", "1700000000") == want
+
+    _, body, _ = push._payload(
+        {"type": "feishu", "url": "https://x/hook", "secret": ""}, "T", "正文")
+    assert body == {"msg_type": "text", "content": {"text": "正文"}}, body
+    _, body, _ = push._payload(
+        {"type": "feishu", "url": "https://x/hook", "secret": "s"}, "T", "正文")
+    assert body.get("timestamp") and body.get("sign"), body
+
+    url, body, _ = push._payload(
+        {"type": "dingtalk", "url": "https://x/hook?access_token=t", "secret": "s"}, "标题", "正文")
+    assert "timestamp=" in url and "sign=" in url, url
+    assert body["msgtype"] == "markdown" and body["markdown"]["title"] == "标题", body
+
+    _, body, _ = push._payload({"type": "wecom", "url": "https://x/hook", "secret": ""}, "T", "正文")
+    assert body == {"msgtype": "markdown", "markdown": {"content": "正文"}}, body
+
+    url, body, _ = push._payload(
+        {"type": "telegram", "url": "", "secret": "123:ABC", "chat_id": "-100"}, "T", "正文")
+    assert url == "https://api.telegram.org/bot123:ABC/sendMessage", url
+    assert body["chat_id"] == "-100" and body["disable_web_page_preview"] is True, body
+
+    _, body, headers = push._payload(
+        {"type": "webhook", "url": "https://x/h", "secret": "tok"}, "T", "正文")
+    assert headers == {"Authorization": "Bearer tok"}, headers
+    assert body == {"title": "T", "text": "正文"}, body
+
+    # HTTP 200 但业务失败也要翻成异常
+    try:
+        push._check("dingtalk", '{"errcode": 310000, "errmsg": "sign not match"}')
+    except RuntimeError as e:
+        assert "310000" in str(e), e
+    else:
+        raise AssertionError("钉钉业务错误码应翻译成异常")
+    push._check("feishu", '{"code": 0, "msg": "success"}')
+
+    tmpdir = pathlib.Path(tempfile.mkdtemp(prefix="mingjian_push2_"))
+    dbp = tmpdir / "push.db"
+    old_path, old_url = store.DB_PATH, store.DB_URL
+    old_conn, old_ready = getattr(store._local, "conn", None), store._ready
+    old_post = push.net.post_json
+    store.DB_PATH, store.DB_URL, store._local.conn = dbp, "", None
+    store._ready = None
+    try:
+        store.init()
+        push.save_channel({"type": "wecom", "name": "好渠道", "url": "https://ok.example/hook"})
+        push.save_channel({"type": "webhook", "name": "坏渠道", "url": "https://bad.example/hook"})
+        calls = []
+
+        def fake_post(url, body, headers=None, timeout=10, retries=1):
+            calls.append(url)
+            if "bad" in url:
+                raise RuntimeError("connection reset")
+            return '{"errcode": 0, "errmsg": "ok"}'
+
+        push.net.post_json = fake_post
+        rows = push.send_all("标题", "正文")
+        # 单个渠道失败不影响其它渠道，也不把异常抛给主流程
+        assert len(rows) == 2 and len(calls) == 2, rows
+        assert [r["ok"] for r in rows] == [True, False], rows
+        assert "connection reset" in rows[1]["error"], rows[1]
+
+        # 编辑态留空测试用已存值，且不落盘
+        stored = push.public()["channels"][0]
+        res = push.probe({"id": stored["id"], "type": "wecom", "url": ""})
+        assert res["ok"] and len(push.public()["channels"]) == 2, res
+
+        # 摘要：要点 / 缺口 / 深链接；超长截断且长度受控
+        title, text = report.push_digest(
+            "测试公司", "R1", [{"id": "F01", "confidence": 0.9, "conflict": 1}],
+            [{"text": "产能翻倍", "citations": ["F01"]}], ["未披露产能"],
+            "https://mj.example.com")
+        assert title.startswith("【明鉴】测试公司"), title
+        assert "要点" in text and "产能翻倍" in text and "F01" in text, text
+        assert "缺口 1 项" in text and "https://mj.example.com/?run=R1" in text, text
+        _, long_text = report.push_digest(
+            "长文公司", "R2", [], [{"text": "长" * 4000, "citations": []}])
+        assert len(long_text) <= report.PUSH_MAX, len(long_text)
+        assert long_text.endswith("…（已截断）"), long_text[-20:]
+    finally:
+        push.net.post_json = old_post
         if getattr(store._local, "conn", None) is not None:
             store._local.conn.close()
         store._local.conn, store._ready = old_conn, old_ready

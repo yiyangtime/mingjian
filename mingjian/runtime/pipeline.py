@@ -52,6 +52,9 @@ class Pipeline:
         self.quote: dict = {}
         self.docs: list[dict] = []
         self.facts: list[dict] = []
+        self.dropped_conflicts: list[dict] = []
+        self.judges: list[dict] = []
+        self.gaps: list[str] = []
         self.changes: dict = {}
         self.report_md = ""
         self.stats: dict = {}
@@ -186,6 +189,8 @@ class Pipeline:
                 "confidence": float(row.get("confidence") or 0),
                 "dedupe_key": row.get("dedupe_key") or "",
                 "corroboration": int(row.get("corroboration") or 1),
+                "conflict": int(row.get("conflict") or 0),
+                "conflict_note": row.get("conflict_note") or "",
                 "source": doc.get("source") or "", "url": doc.get("url") or "",
                 "published_at": doc.get("published_at") or "",
                 "evidence_level": doc.get("evidence_level") or "",
@@ -446,15 +451,20 @@ class Pipeline:
                 raw.append(f)
         self._log(f"候选事实 {len(raw)} 条（已过滤例行公告与非主体相关资讯）")
 
-        merged = EX.merge_facts(raw)
-        dropped = len(raw) - len(merged)
+        merged_all = EX.merge_facts(raw)
+        conflict_all = [f for f in merged_all if f.conflict]
+        dropped = len(raw) - len(merged_all)
         if dropped:
-            self._log(f"跨源合并：{dropped} 条重复报道并入同一事件，佐证数累加")
+            note = f"，其中 {len(conflict_all)} 条存在口径冲突" if conflict_all else ""
+            self._log(f"跨源合并：{dropped} 条重复报道并入同一事件，佐证数累加{note}")
 
         doc_by_id = {d["id"]: d for d in self.docs}
-        merged = [f for f in merged if f.confidence >= self.cfg.min_fact_conf]
+        merged = [f for f in merged_all if f.confidence >= self.cfg.min_fact_conf]
         merged.sort(key=lambda f: (-f.confidence, f.event_date or ""))
         merged = merged[:self.cfg.max_facts]
+        # 冲突导致置信度跌破阈值的，不能连冲突一起消失：留给缺口清单说明
+        self.dropped_conflicts = [f.as_dict() for f in conflict_all if f not in merged]
+        self.stats["conflicts"] = len(conflict_all)
 
         out = []
         for i, f in enumerate(merged, 1):
@@ -505,26 +515,43 @@ class Pipeline:
         except Exception as e:
             self._log(f"记忆召回失败：{type(e).__name__}", "warn")
         self.stats["memory_hits"] = len(mems)
-        judges = R.judgments(self.facts, self.profile)
+        rule_judges = R.judgments(self.facts, self.profile)
+        judges, judge_meta = R.apply_polish(rule_judges, None)
         model_used = ""
+        rejected: list[dict] = []
+        polished: dict | None = None
         if llm.available():
             self._log(f"调用模型润色判断段：{self.cfg.llm_model}")
-            polished = llm.polish_judgments(judges, self.facts)
-            if polished:
-                judges = polished
+            polished = llm.polish_judgments(rule_judges, self.facts)
+            rejected = (polished or {}).get("rejected") or []
+            judges, judge_meta = R.apply_polish(rule_judges, polished)
+            if judge_meta["llm"]:
                 model_used = self.cfg.llm_model
-                self._log("模型润色完成，引用已逐条校验", "ok")
+                self._log("模型润色完成，引用、数字与表述重合度均已校验", "ok")
+            elif polished:
+                self._log(f"模型改写未全部通过校验，回退规则判断（拦截 {len(rejected)} 条）", "warn")
+                for item in rejected[:3]:
+                    self._log(f"拦截：{item.get('text', '')[:40]}（{item.get('reason', '')}）", "warn")
             else:
                 self._log("模型返回不合规（引用缺失或格式错误），回退规则判断", "warn")
+        judge_meta["rejected"] = len(rejected)
+        judge_meta["trail"] = self._write_judge_trail(
+            rule_judges, judges, rejected, model_used,
+            str((polished or {}).get("raw") or "") if llm.available() else "")
 
-        gaps_list = R.gaps(self.facts, self.docs, self.changes, self.entity)
+        gaps_list = R.gaps(self.facts, self.docs, self.changes, self.entity,
+                           dropped_conflicts=self.dropped_conflicts)
         sug = R.suggestions(judges, self.facts, gaps_list)
         self.report_md = R.render_markdown(
             company=self.company, entity=self.entity, profile=self.profile, quote=self.quote,
             facts=self.facts, docs=self.docs, changes=self.changes, gaps_list=gaps_list, sug=sug,
-            judges=judges, run_meta={"days": self.cfg.days, "run_id": self.run_id,
-                                     "finished_at": _now(), "model_used": model_used},
+            judges=judges, judge_meta=judge_meta,
+            run_meta={"days": self.cfg.days, "run_id": self.run_id,
+                      "finished_at": _now(), "model_used": model_used},
         )
+        # 推送摘要需要最终判断与缺口；自动推送在第 7 步末尾执行
+        self.judges = judges
+        self.gaps = gaps_list
         self.stats.update({
             "docs": len(self.docs),
             "announcements": sum(1 for d in self.docs if d["kind"] == "announcement"),
@@ -533,11 +560,36 @@ class Pipeline:
             "facts": len(self.facts),
             "high_conf": sum(1 for f in self.facts if f["confidence"] >= 0.85),
             "unlocatable": sum(1 for f in self.facts if not f.get("doc_id")),
+            "conflicts": self.stats.get("conflicts", 0),
+            "judgments_rule": judge_meta["rule"],
+            "judgments_llm": judge_meta["llm"],
+            "judgments_rejected": judge_meta["rejected"],
             "model_used": model_used or "rule-engine",
             "new": len(self.changes.get("new", [])),
             "escalated": len(self.changes.get("escalated", [])),
         })
         self._step(6, "报告成稿", "done", f"{len(judges)} 条判断")
+
+    def _write_judge_trail(self, rule: list[dict], final: list[dict],
+                           rejected: list[dict], model: str, raw: str = "") -> str:
+        """判断改写前后版本落盘并入库（不依赖模型是否启用），供事后对比与复核。"""
+        name = f"judgments_{self.run_id}.json"
+        payload = {"run_id": self.run_id, "model": model or "rule-engine",
+                   "requested": len(rule),
+                   "accepted": sum(1 for j in final if j.get("source") == "llm"),
+                   "rule": rule, "final": final, "rejected": rejected}
+        if raw:
+            payload["raw"] = raw
+        try:
+            (OUT_DIR / name).write_text(json.dumps(payload, ensure_ascii=False, indent=2),
+                                        encoding="utf-8")
+        except OSError as e:
+            self._log(f"判断留痕写入失败：{type(e).__name__}", "warn")
+        try:
+            store.save_judgments(self.run_id, payload)
+        except Exception as e:  # noqa: BLE001
+            self._log(f"判断留痕入库失败：{type(e).__name__}", "warn")
+        return name
 
     # ---- 7. 入库 ----
     def _s7_persist(self) -> None:
@@ -559,6 +611,28 @@ class Pipeline:
             self.errors.append(f"报告落盘失败：{type(e).__name__}: {e}")
         self._step(7, "留痕入库", "done",
                    f"{len(self.facts)} 条事实已落库，报告已写入 output/")
+        self._push_report()
+
+    def _push_report(self) -> None:
+        """自动推送报告摘要：失败只记日志与 errors，不影响运行完成状态。"""
+        try:
+            from ..infra import push
+            if not push.auto_enabled():
+                return
+            title, text = R.push_digest(self.company, self.run_id, self.facts,
+                                        self.judges, self.gaps, push.base_url())
+            results = push.send_all(title, text)
+            ok = sum(1 for r in results if r.get("ok"))
+            store.add_audit(self.entity_key, self.run_id, "push", f"{ok}/{len(results)}",
+                            reason="自动推送报告摘要", actor="Agent")
+            self._log(f"报告推送完毕：{ok}/{len(results)} 个渠道",
+                      "ok" if results and ok == len(results) else "warn")
+            for r in results:
+                if not r.get("ok"):
+                    self._log(f"推送失败（{r.get('name')}）：{r.get('error', '')[:80]}", "warn")
+        except Exception as e:  # noqa: BLE001 —— 推送失败不能把已完成的运行拖成 failed
+            self.errors.append(f"报告推送失败：{type(e).__name__}: {e}")
+            self._log(f"报告推送失败：{type(e).__name__}", "warn")
 
 
 def run(company: str, cfg=None, on_event=None, run_id: str | None = None,
@@ -571,11 +645,12 @@ def run(company: str, cfg=None, on_event=None, run_id: str | None = None,
 
 def facts_csv(facts: list[dict]) -> str:
     head = ["编号", "类型", "事实陈述", "金额", "事件日期", "置信度", "佐证源数",
-            "来源", "证据等级", "发布时间", "证据句", "原文链接"]
+            "口径冲突说明", "来源", "证据等级", "发布时间", "证据句", "原文链接"]
     lines = [",".join(head)]
     for f in facts:
         row = [f["id"], f["type_label"], f["statement"], f.get("amount", ""),
                f.get("event_date", ""), f"{f['confidence']:.2f}", str(f.get("corroboration", 1)),
+               f.get("conflict_note", ""),
                f.get("source", ""), f.get("evidence_level", ""), f.get("published_at", ""),
                f.get("evidence_quote", ""), f.get("url", "")]
         lines.append(",".join('"' + str(c).replace('"', '""') + '"' for c in row))

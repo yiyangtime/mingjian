@@ -30,15 +30,17 @@ mingjian/                    后端包
 │   ├── log.py               日志与轮转
 │   ├── net.py               HTTP 会话、重试、限速、字符集处理
 │   ├── textproc.py          清洗、截断、句子与标题识别
+│   ├── verify.py            判断保真：中文数字归一、否定/方向、子句重合与分指标冲突
 │   ├── pdftext.py           PDF 文本层还原
 │   └── context.py           模型上下文预算（中文按字，其它按 4 字符）
 ├── infra/
-│   ├── store.py             十二表与全部 SQL（运行期）
+│   ├── store.py             十三张表与全部 SQL（运行期）
 │   ├── db.py                连接层：方言识别、占位符转译、事务与行工厂
 │   ├── schema.py            表结构的单一来源，渲染 SQLite / PostgreSQL / MySQL 方言
-│   ├── llm.py               OpenAI 兼容调用与返回校验
+│   ├── llm.py               OpenAI 兼容调用；只装被引用事实，引用逐条对齐与数字/否定/方向校验
 │   ├── llmcfg.py            服务商预设、多套配置、连接测试（落 settings 表）
 │   ├── registry.py          工商登记接口：预设、鉴权、字段映射、本地缓存（落 settings / companies）
+│   ├── push.py              报告推送：五类渠道预设、加签、打码回传与逐渠道失败隔离（落 settings）
 │   ├── optstore.py          离线候选版本、评测报告与审计的本地文件存储
 │   ├── scheduler.py         每天 / 每周表达式
 │   └── sources/
@@ -93,7 +95,8 @@ web/                         前端工程
       4 事实抽取   services/extract.py → 检查点 3（confidence 计算与合并）
      （第 4 步结束存检查点 4）
       5 变化比对   services/diff.py 对 snapshots 上一份快照
-      6 报告成稿   services/report.py（可选模型只润色判断段）
+      6 报告成稿   services/report.py（可选模型只润色判断段；拦截则整批回退，
+                    判断前后版本写入 runs.judgments 与 output/judgments_<run_id>.json）
       7 留痕入库   facts / snapshots / audit / output/*.md + csv
   → 事件逐条落 run_events，前端按 seq 增量拉取
 ```
@@ -149,6 +152,11 @@ SQL。表结构在 `infra/schema.py` 里定义一份，可渲染成三种方言�
 同一关键词不会反复消耗接口额度；未配置时整条链路关闭，不影响原有搜索。检索结果里的
 官网随 `companies` 一并缓存，旧库启动时自动补列。
 
+报告推送配置也存在 `settings`（键 `push`）：飞书 / 钉钉 / 企业微信 / Telegram /
+通用 Webhook 五类渠道可同时启用，Webhook 地址与密钥只回尾号、编辑留空沿用原值。
+自动推送默认关闭；开启后七步管道在落库末尾推送摘要，任一渠道失败只记日志与审计，
+不影响运行结果，页面也可对历史报告手动推送。
+
 离线优化不新增数据库表：生效规则指针、版本归档、评测报告与审计都在
 `data/optimizer/`。每次运行开始时读取一次版本，版本号写入 `runs.params` 与检查点，
 保证历史运行和续跑不被后续上线串味。候选只允许增量关键词，不能执行代码；
@@ -193,6 +201,7 @@ SQL。表结构在 `infra/schema.py` 里定义一份，可渲染成三种方言�
 | 改检索词 | `data/optimizer/search_terms.json` | 2—8 路、每路不超过 40 字；整份覆盖，非法回退基线；逐路召回与被拒条目留痕；尚未纳入门禁 |
 | 接新数据源 | `infra/sources/<源>.py` | 只做取数与归一化，不写业务判断；失败要可降级 |
 | 换工商接口 | 接入中心「工商数据源」，或 `infra/registry.py` 的 `PRESETS` | 只改请求形态与字段映射；密钥不写进代码与文档 |
+| 接推送渠道 | 接入中心「报告推送」，或 `infra/push.py` 的 `TYPES` / `_payload` | 新渠道要同步消息体与响应判定；密钥只落库不回传 |
 | 加报告节 | `services/report.py` | 同步 `docs/methodology.md` 与前端渲染 |
 | 加页面 | `web/src/features/<域>/` | 路由表登记；视图行数预算只降不升 |
 | 加技能 | `services/skills.py` | 参数契约 + 白名单；内部步骤只登记不可执行 |

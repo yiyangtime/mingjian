@@ -101,3 +101,40 @@ export interface RegistryTestResp {
   sample: Record<string, string>
   error: string
 }
+
+/** 报告推送：渠道地址与密钥都按凭证处理，后端只回是否已设置与尾号。 */
+export interface PushType {
+  id: string
+  name: string
+  group: string
+  fields: string[]
+  note?: string
+}
+
+export interface PushChannel {
+  id: string
+  type: string
+  name: string
+  url_set: boolean
+  url_hint: string
+  secret_set: boolean
+  secret_hint: string
+  chat_id: string
+  enabled: boolean
+}
+
+export interface PushConfig {
+  types: PushType[]
+  channels: PushChannel[]
+  auto: boolean
+  base_url: string
+  enabled: boolean
+  recorded: boolean
+}
+
+export interface PushTestResp {
+  ok: boolean
+  ms: number
+  error: string
+  reply?: string
+}

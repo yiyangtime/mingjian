@@ -523,7 +523,7 @@ def harvest(out_dir, limit: int = 200, entity_key: str = "", prefix: str = "H",
     标准答案只能由人读原文后填写。`hint.predicted` 是运行期判定，只用于对照
     与发现分歧，不能直接当 expected——否则评测集就变成了模型的回声。
     """
-    from ..infra import store            # 只有 harvest 需要数据库，其余 optimize 命令离线
+    from ..infra import store  # 只有 harvest 需要数据库，其余 optimize 命令离线
 
     split = _split(split)
     try:
@@ -607,7 +607,7 @@ def harvest_docs(out_dir, limit: int = 200, entity_key: str = "", prefix: str = 
     时连已产出事实的文档一起导，用于检查误报。expected 只能填 fact 或 none：
     这一层只问“该文档是否应产出事实”，不标事件类型。
     """
-    from ..infra import store            # 只有采集需要数据库，其余 optimize 命令离线
+    from ..infra import store  # 只有采集需要数据库，其余 optimize 命令离线
 
     split = _split(split)
     try:

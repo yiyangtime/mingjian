@@ -8,6 +8,10 @@ export interface RunStats {
   elapsed_sec?: number
   companies?: number
   reused?: number
+  conflicts?: number
+  judgments_rule?: number
+  judgments_llm?: number
+  judgments_rejected?: number
   [k: string]: number | undefined
 }
 
@@ -22,6 +26,8 @@ export interface Fact {
   event_date?: string
   confidence: number
   corroboration?: number
+  conflict?: number
+  conflict_note?: string
   source?: string
   url?: string
   published_at?: string
@@ -80,6 +86,32 @@ export interface Judgment {
   text: string
   basis: string
   conf: string
+}
+
+export interface JudgmentItem {
+  text: string
+  citations: string[]
+  conf?: number
+  source?: string
+  support?: number
+  index?: number
+}
+
+export interface JudgmentReject {
+  text: string
+  reason: string
+}
+
+/** 判断改写留痕：规则版、采用版与被拒原因，用于事后对比模型到底改了什么。 */
+export interface JudgmentTrail {
+  run_id: string
+  model: string
+  requested?: number
+  accepted?: number
+  rule: JudgmentItem[]
+  final: JudgmentItem[]
+  rejected: JudgmentReject[]
+  raw?: string
 }
 
 export interface RunResult {

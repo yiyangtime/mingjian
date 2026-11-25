@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppHeader from '../../shared/components/AppHeader.vue'
 import SlideDrawer from '../../shared/components/SlideDrawer.vue'
+import JudgmentTrail from './components/JudgmentTrail.vue'
 import { api } from '../../shared/api'
 import { toast } from '../../shared/composables/toast'
 import { confirmAsk } from '../../shared/composables/confirm'
@@ -57,6 +58,7 @@ const runCompany = ref('')
 const elapsed = ref(0)
 const logFollow = ref(true)
 const harvestBusy = ref(false)
+const pushBusy = ref(false)
 let elapsedTimer: number | undefined
 
 const polling = useRunPolling(700)
@@ -68,6 +70,7 @@ const tab = ref<Tab>('facts')
 const q = ref('')
 const typeFilter = ref('')
 const drawerFact = ref<Fact | null>(null)
+const trailOpen = ref(false)
 
 /* ---------- 上次运行 ---------- */
 function loadLastRun(): { id: string; company: string; ts: number } | null {
@@ -414,6 +417,11 @@ const quality = computed(() => {
     { k: '可回溯', v: `${fs.filter((f) => f.doc_id).length}/${fs.length}`, note: '无来源的事实不入库' },
     { k: '多源互证', v: `${fs.filter((f) => (f.corroboration || 1) > 1).length} 条`, note: '同一事件被多个来源报道' },
     {
+      k: '口径冲突',
+      v: `${fs.filter((f) => f.conflict).length} 条`,
+      note: '多源金额/规模不一致，已下调置信度并保留说明',
+    },
+    {
       k: '历史基线',
       v: ch.has_baseline ? `${ch.baseline_count} 条` : '无',
       note: ch.has_baseline ? '已做新增/升温比对' : '首次运行，不做变化判断',
@@ -428,6 +436,8 @@ const quality = computed(() => {
   }
   const img = docs.filter((d) => d.evidence_level === 'title' && (d.url || '').toLowerCase().endsWith('.pdf')).length
   if (img) gaps.push(`${img} 份公告 PDF 为图片型（无文本层），程序无法读取，已保留链接。`)
+  const cf = fs.filter((f) => f.conflict).length
+  if (cf) gaps.push(`${cf} 条事实存在多源口径冲突（金额或规模不一致），引用前必须核对原文。`)
   return { rows, gaps }
 })
 
@@ -447,6 +457,10 @@ const drawerKv = computed(() => {
     { k: '事件日期', v: f.event_date || '—', cls: '' },
     { k: '金额/规模', v: f.amount || '—', cls: '' },
     { k: '交叉印证', v: (f.corroboration || 1) > 1 ? `${f.corroboration} 个来源` : '单源', cls: '' },
+    ...(f.conflict
+      ? [{ k: '口径冲突', v: `${f.conflict} 处（已下调置信度）`, cls: 'conf lo' },
+         { k: '冲突说明', v: f.conflict_note || '—', cls: '' }]
+      : []),
   ]
 })
 
@@ -645,6 +659,28 @@ async function copyLink(): Promise<void> {
   const url = `${location.origin}${location.pathname}?run=${encodeURIComponent(rid)}&tab=${tab.value}`
   const ok = await copyText(url)
   toast(ok ? '链接已复制，可直接发给同事' : '复制失败，请手动复制地址栏')
+}
+
+async function pushRun(): Promise<void> {
+  const rid = result.value?.run_id || lastId.value
+  if (!rid || pushBusy.value) return
+  pushBusy.value = true
+  try {
+    const d = await api.post<{ ok: boolean; results: { ok: boolean; name: string; error?: string }[] }>(
+      `/api/company/push/${rid}`, { actor: actorName() })
+    const rows = d.results || []
+    const good = rows.filter((r) => r.ok)
+    if (good.length === rows.length) {
+      toast(`已推送到 ${good.length} 个渠道：${good.map((r) => r.name).join('、')}`)
+    } else {
+      const bad = rows.filter((r) => !r.ok).map((r) => `${r.name}（${r.error || '失败'}）`).join('；')
+      toast(`推送完成 ${good.length}/${rows.length}，失败：${bad}`)
+    }
+  } catch (e) {
+    toast('推送失败：' + (e as Error).message)
+  } finally {
+    pushBusy.value = false
+  }
 }
 
 async function harvestMemory(): Promise<void> {
@@ -869,6 +905,10 @@ onMounted(() => {
             <button class="btn btn-ghost btn-sm" :disabled="harvestBusy" @click="harvestMemory">
               {{ harvestBusy ? '沉淀中…' : '存为记忆' }}
             </button>
+            <button class="btn btn-ghost btn-sm" @click="trailOpen = true">判断留痕</button>
+            <button class="btn btn-ghost btn-sm" :disabled="pushBusy" @click="pushRun">
+              {{ pushBusy ? '推送中…' : '推送报告' }}
+            </button>
             <button class="btn btn-ghost btn-sm" @click="download('md')">下载报告</button>
             <button class="btn btn-ghost btn-sm" @click="download('csv')">下载事实表</button>
           </div>
@@ -899,6 +939,7 @@ onMounted(() => {
                   <td>
                     {{ f.statement }}
                     <span v-if="(f.corroboration || 1) > 1" class="pill">佐证 {{ f.corroboration }} 源</span>
+                    <span v-if="f.conflict" class="pill">口径冲突 {{ f.conflict }} 处</span>
                   </td>
                   <td class="sub-cell">{{ f.amount || '—' }}</td>
                   <td class="mute-cell">{{ f.event_date || '—' }}</td>
@@ -970,6 +1011,12 @@ onMounted(() => {
       <button class="btn btn-ghost btn-sm" @click="audit('reject')">存疑</button>
     </template>
   </SlideDrawer>
+
+  <JudgmentTrail
+    :open="trailOpen"
+    :rid="result?.run_id || lastId"
+    @close="trailOpen = false"
+  />
 </template>
 
 <style scoped>

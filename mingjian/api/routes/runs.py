@@ -1,4 +1,4 @@
-"""企业洞察运行路由：发起、轮询、取消、续跑、历史、报告与事实表。"""
+"""企业洞察运行路由：发起、轮询、取消、续跑、历史、报告、事实表与推送。"""
 from __future__ import annotations
 
 import json
@@ -7,8 +7,9 @@ import threading
 from fastapi import APIRouter, Body, HTTPException
 from fastapi.responses import Response
 
-from ...infra import store
+from ...infra import push, store
 from ...runtime import jobs, pipeline
+from ...services import report as R
 
 router = APIRouter(tags=["企业洞察"])
 
@@ -70,6 +71,7 @@ def list_runs(limit: int = 20, offset: int = 0, q: str = "", status: str = ""):
             r["stats"] = {}
         r["kind"] = "compare" if str(r.get("id", "")).startswith("C") else "run"
         r.pop("params", None)
+        r.pop("judgments", None)        # 留痕体积大，只在详情接口返回
     return {"runs": rows, "total": store.count_runs(q, status),
             "limit": limit, "offset": offset}
 
@@ -100,13 +102,45 @@ def get_facts(rid: str):
     slim = [{"id": f["id"].split("-")[-1], "type_label": f["type_label"],
              "statement": f["statement"], "amount": f["amount"],
              "event_date": f["event_date"], "confidence": f["confidence"],
-             "corroboration": f["corroboration"], "evidence_quote": f["evidence_quote"],
-             "doc_id": f["doc_id"]} for f in facts]
+             "corroboration": f["corroboration"], "conflict": f.get("conflict") or 0,
+             "conflict_note": f.get("conflict_note") or "",
+             "evidence_quote": f["evidence_quote"], "doc_id": f["doc_id"]} for f in facts]
     return Response(
         pipeline.facts_csv(slim).encode("utf-8"),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="facts_{rid}.csv"'},
     )
+
+
+@router.get("/api/company/judgments/{rid}")
+def get_judgments(rid: str):
+    """判断改写留痕：规则版、采用版、被拒原因与模型原始输出。"""
+    data = store.judgments_of_run(rid)
+    if not data:
+        raise HTTPException(404, "该运行没有判断留痕（多为升级前的历史运行）")
+    return data
+
+
+@router.post("/api/company/push/{rid}")
+def push_report(rid: str, data: dict | None = Body(default=None)):
+    """把已生成报告摘要手动推送到所有启用渠道；没有渠道时返回 400。"""
+    data = data or {}
+    actor = str(data.get("actor") or "").strip() or "业务用户"
+    run = store.get_run(rid)
+    if not run:
+        raise HTTPException(404, "找不到该运行")
+    facts = store.facts_of_run(rid)
+    trail = store.judgments_of_run(rid) or {}
+    judges = trail.get("final") or []
+    title, text = R.push_digest(str(run.get("company") or ""), rid, facts, judges,
+                                None, push.base_url())
+    results = push.send_all(title, text)
+    if not results:
+        raise HTTPException(400, "没有启用中的推送渠道，请先到接入中心配置")
+    ok = sum(1 for r in results if r.get("ok"))
+    store.add_audit(str(run.get("entity_key") or ""), rid, "push", f"{ok}/{len(results)}",
+                    reason="手动推送报告摘要", actor=actor)
+    return {"ok": ok > 0, "title": title, "results": results}
 
 
 @router.post("/api/company/run")

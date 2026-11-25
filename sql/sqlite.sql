@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS runs (
   finished_at TEXT,
   params TEXT,
   stats TEXT,
+  judgments TEXT,
   error TEXT
 );
 
@@ -61,6 +62,8 @@ CREATE TABLE IF NOT EXISTS facts (
   confidence REAL,
   dedupe_key TEXT,
   corroboration INTEGER DEFAULT 1,
+  conflict INTEGER DEFAULT 0,
+  conflict_note TEXT,
   created_at TEXT
 );
 

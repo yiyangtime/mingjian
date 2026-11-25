@@ -101,7 +101,7 @@ onBeforeUnmount(() => {
 .hside { display: flex; align-items: center; gap: 11px; min-width: 0; }
 .hstate {
   justify-self: end; display: flex; align-items: center; gap: 8px;
-  min-width: 0; flex-wrap: wrap; justify-content: flex-end;
+  min-width: 0; flex-wrap: nowrap; justify-content: flex-end;
 }
 .logo {
   width: 34px; height: 34px; border-radius: 10px;
@@ -118,12 +118,13 @@ onBeforeUnmount(() => {
   font-size: 11.5px; font-weight: 500; padding: 4px 10px; border-radius: 999px;
   background: var(--accent-soft); color: var(--accent); white-space: nowrap;
   border: 1px solid var(--accent-line);
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
 }
 .badge.gray { background: #F4F6FA; color: var(--sub); border-color: var(--line); }
 .svc {
   display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 500;
   color: var(--ok); white-space: nowrap; padding: 4px 10px; border-radius: 999px;
-  background: #fff; border: 1px solid var(--line);
+  background: #fff; border: 1px solid var(--line); flex: 0 0 auto;
 }
 .svc i { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); display: block; }
 .svc.off { color: var(--err); }
@@ -138,7 +139,8 @@ onBeforeUnmount(() => {
 .help:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .task-id {
   font-family: var(--mono); font-size: 11.5px; color: var(--mute);
-  max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 260px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 0 1 auto;
 }
 .nav {
   display: flex; gap: 2px; justify-self: center; max-width: 100%;

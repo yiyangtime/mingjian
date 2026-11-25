@@ -8,6 +8,7 @@ import { confirmAsk } from '../../shared/composables/confirm'
 import { DEFAULT_ACTOR, actorName, setActorName } from '../../shared/composables/identity'
 import ModelProfilesCard from './components/ModelProfilesCard.vue'
 import RegistryCard from './components/RegistryCard.vue'
+import PushCard from './components/PushCard.vue'
 import type { LlmConfig, Profile, Provider, TestResp } from './types'
 
 const providers = ref<Provider[]>([])
@@ -325,6 +326,7 @@ onMounted(() => {
     </AppModal>
 
     <RegistryCard />
+    <PushCard />
   </div>
 </template>
 

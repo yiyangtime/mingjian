@@ -113,6 +113,33 @@ def judgments(facts: list[dict], profile: dict) -> list[dict]:
     return out
 
 
+def apply_polish(rule_judges: list[dict], polished: dict | None) -> tuple[list[dict], dict]:
+    """模型改写结果的采用策略：任一条未过校验，整批回退规则判断。
+
+    只采用“逐条对上”的改写：模型合并/删除判断时，读者就无法把改写句与
+    原判断一一对应，留痕也失去意义；宁可整批不用。
+    返回 (最终判断, 审计元信息)，审计元信息进报告与 runs.stats。
+    """
+    meta = {"rule": len(rule_judges), "llm": 0,
+            "rejected": len((polished or {}).get("rejected") or []), "fallback": ""}
+    if not polished:
+        return rule_judges, meta
+    accepted = polished.get("judgments") or []
+    rejected = polished.get("rejected") or []
+    if rejected:
+        meta["fallback"] = f"{len(rejected)} 条判断未通过数字/引用校验，整批回退规则判断"
+        return rule_judges, meta
+    if len(accepted) != len(rule_judges):
+        meta["fallback"] = "模型改写条数与规则判断不一致，整批回退"
+        return rule_judges, meta
+    for i, (got, want) in enumerate(zip(accepted, rule_judges), 1):
+        if set(got.get("citations") or []) != set(want.get("citations") or []):
+            meta["fallback"] = f"第 {i} 条判断引用与原判断不一致，整批回退"
+            return rule_judges, meta
+    meta["llm"] = len(accepted)
+    return accepted, meta
+
+
 def suggestions(jlist: list[dict], facts: list[dict], gaps: list[str]) -> list[str]:
     types = {f["type"] for f in facts}
     out: list[str] = []
@@ -133,7 +160,8 @@ def suggestions(jlist: list[dict], facts: list[dict], gaps: list[str]) -> list[s
     return out[:6]
 
 
-def gaps(facts: list[dict], docs: list[dict], changes: dict, entity: dict) -> list[str]:
+def gaps(facts: list[dict], docs: list[dict], changes: dict, entity: dict,
+         dropped_conflicts: list[dict] | None = None) -> list[str]:
     out: list[str] = []
     if not changes.get("has_baseline"):
         out.append("无历史基线：本次为首次运行，变化比对不可用，所有条目均按「首次纳入」处理。")
@@ -151,6 +179,15 @@ def gaps(facts: list[dict], docs: list[dict], changes: dict, entity: dict) -> li
     img_pdf = [d for d in docs if d.get("evidence_level") == "title" and (d.get("url") or "").lower().endswith(".pdf")]
     if img_pdf:
         out.append(f"{len(img_pdf)} 份公告 PDF 为图片型（无文本层），程序无法读取，已保留链接供人工查阅。")
+    conflicts = [f for f in facts if f.get("conflict")]
+    if conflicts:
+        out.append(f"{len(conflicts)} 条事实存在多源口径冲突（金额或规模不一致），"
+                   f"已下调置信度并保留冲突说明，引用前必须核对原文。")
+    dropped = dropped_conflicts or []
+    if dropped:
+        sample = "；".join(str(f.get("statement") or "")[:40] for f in dropped[:2])
+        out.append(f"{len(dropped)} 条事实因多源口径冲突且置信度不足 0.45 未进入事实区"
+                   f"（{sample}），已保留冲突说明，需人工核对后再引用。")
     if not entity.get("code"):
         out.append("未匹配到上市主体：非上市公司或名称不精确，公告与行情数据缺失。")
     return out
@@ -159,7 +196,7 @@ def gaps(facts: list[dict], docs: list[dict], changes: dict, entity: dict) -> li
 def render_markdown(*, company: str, entity: dict, profile: dict, quote: dict,
                     facts: list[dict], docs: list[dict], changes: dict,
                     gaps_list: list[str], sug: list[str], judges: list[dict],
-                    run_meta: dict) -> str:
+                    run_meta: dict, judge_meta: dict | None = None) -> str:
     ts = run_meta.get("finished_at") or time.strftime("%Y-%m-%d %H:%M")
     L: list[str] = []
     A = L.append
@@ -175,6 +212,12 @@ def render_markdown(*, company: str, entity: dict, profile: dict, quote: dict,
         A(f"> 模型：{run_meta['model_used']}（仅用于润色判断段，事实与引用由程序生成并校验）")
     else:
         A("> 模型：未配置，判断段由规则引擎生成（结论仍逐条挂事实编号）")
+    jm = judge_meta or {}
+    if jm:
+        trail = f" ｜ 留痕：output/{jm['trail']}" if jm.get("trail") else ""
+        extra = f"；{jm['fallback']}" if jm.get("fallback") else ""
+        A(f"> 判断审计：规则生成 {jm.get('rule', 0)} 条，模型改写 {jm.get('llm', 0)} 条，"
+          f"校验拦截 {jm.get('rejected', 0)} 条{extra}{trail}")
     A("")
 
     # 一、速览
@@ -220,11 +263,15 @@ def render_markdown(*, company: str, entity: dict, profile: dict, quote: dict,
         A("")
         for f in sorted(groups[t], key=lambda x: -x["confidence"]):
             badge = f" · 佐证 {f['corroboration']} 源" if f.get("corroboration", 1) > 1 else ""
+            if f.get("conflict"):
+                badge += f" · 口径冲突 {f['conflict']} 处"
             amt = f" ｜ {f['amount']}" if f.get("amount") else ""
             A(f"- **[{f['id']}]** {f['statement']}{amt}")
             A(f"  - 证据：{f['evidence_quote']}")
             A(f"  - 来源：{f.get('source') or '—'}，{f.get('published_at') or '—'}，"
               f"证据等级 {f.get('evidence_level')}，置信度 {f['confidence']:.2f}{badge}")
+            if f.get("conflict_note"):
+                A(f"  - 口径冲突：{f['conflict_note']}（已下调置信度，引用前核对原文）")
             if f.get("url"):
                 A(f"  - 原文：<{f['url']}>")
         A("")
@@ -262,9 +309,11 @@ def render_markdown(*, company: str, entity: dict, profile: dict, quote: dict,
     A("> 判断为推断，不等同事实。每条标注依据的事实编号与置信度，可被单独质疑与推翻。")
     A("")
     for j in judges:
+        src = "模型改写（数字与引用已校验）" if j.get("source") == "llm" else "规则生成"
+        cov = f"，表述重合 {j['support']:.0%}" if isinstance(j.get("support"), (int, float)) else ""
         A(f"- {j['text']}")
         A(f"  - 依据：{'、'.join(j['citations'])} ｜ 置信度：{conf_label(j['conf'])}（{j['conf']:.2f}）"
-          f"{' ｜ 由模型润色，引用已校验' if j.get('source') == 'llm' else ''}")
+          f" ｜ 来源：{src}{cov}")
     A("")
 
     # 六、建议
@@ -299,12 +348,14 @@ def render_markdown(*, company: str, entity: dict, profile: dict, quote: dict,
     A("| 其它 | 非公告、非资讯材料 | 0.52 |")
     A("")
     A("**置信度构成**：证据等级基线 + 0.04 × 事件判定强度 + 含金额 0.03 + 公告全文长文 0.02"
-      " + 多源佐证加分；上限 0.98，低于 0.45 只进缺口、不进事实区。")
+      " + 多源佐证加分；同一事件出现金额/规模口径冲突时不加分并扣 0.06，"
+      "冲突说明随事实落库。上限 0.98，低于 0.45 只进缺口、不进事实区。")
     A("")
     A("**已知局限**")
     A("")
     A("- 事实来自公开信息，不含内部经营数据，不能替代财务口径。")
     A("- 事件分类基于关键词规则，对反讽、否定句（如「并未扩产」）可能误判，需人工抽检。")
+    A("- 多源冲突只比对金额、规模与百分比，「谁更强」这类定性分歧仍需人工判断。")
     A("- 图片型公告 PDF 无法读取文本，仅保留链接。")
     A("- 资讯检索受搜索引擎收录与限流影响，同一查询在不同时间可能返回不同集合。")
     A("")
@@ -313,3 +364,36 @@ def render_markdown(*, company: str, entity: dict, profile: dict, quote: dict,
     A(f"*本报告由 Agent 自动生成。运行编号 {run_meta.get('run_id', '')}。"
       f"所有事实可在运行记录中按编号回查原文。*")
     return "\n".join(L)
+
+
+# ---------------- 推送摘要 ----------------
+
+PUSH_MAX = 1200
+
+
+def push_digest(company: str, run_id: str, facts: list[dict], judges: list[dict],
+                gaps: list | None = None, base_url: str = "") -> tuple[str, str]:
+    """推送摘要：标题 + 纯文本正文，控制在各家机器人的长度限制内。
+
+    只带要点与计数，不贴整份报告：机器人消息是提醒，正文仍以报告为准。
+    """
+    facts = facts or []
+    judges = judges or []
+    high = sum(1 for f in facts if float(f.get("confidence") or 0) >= 0.85)
+    conflict = sum(1 for f in facts if int(f.get("conflict") or 0))
+    lines = [f"{company} · 本期产业情报已生成（{run_id}）", "",
+             f"事实 {len(facts)} 条（高置信 {high}，口径冲突 {conflict}）"]
+    if judges:
+        lines += ["", "要点："]
+        for i, j in enumerate(judges[:3], 1):
+            cites = "、".join(j.get("citations") or [])
+            tail = f"（依据 {cites}）" if cites else ""
+            lines.append(f"{i}. {j.get('text') or ''}{tail}")
+    if gaps:
+        lines += ["", f"数据缺口 {len(gaps)} 项，详见报告「待验证与数据缺口」。"]
+    if base_url:
+        lines += ["", f"详情：{base_url.rstrip('/')}/?run={run_id}"]
+    text = "\n".join(lines)
+    if len(text) > PUSH_MAX:
+        text = text[:PUSH_MAX - 10] + "\n…（已截断）"
+    return f"【明鉴】{company[:30]} · 产业情报", text

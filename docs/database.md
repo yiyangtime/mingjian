@@ -144,7 +144,7 @@ python tools/dbinit.py --dialect postgres --stdout    # 只看不写
 
 ## 六、验证到什么程度
 
-- **SQLite**：全链路实测——自测 54 项、服务启动冒烟、`dbinit.py --check`
+- **SQLite**：全链路实测——自测 64 项、服务启动冒烟、`dbinit.py --check`
   比对 13 张表 / 21 个索引。
 - **PostgreSQL / MySQL**：DDL、占位符转译、保留字与百分号处理都有单元断言，
   但**没有在真实实例上跑过**（开发机没有这两个服务）。首次接库请务必
@@ -169,6 +169,8 @@ python tools/dbinit.py --dialect postgres --stdout    # 只看不写
 - **迁移**：没有版本化迁移，首次启动一次建全表。已有库新增字段请改
   `store.SCHEMA` 与 `schema.TABLES` 两处，并给存量库补 `ALTER TABLE` 语句。
 - **审计**：`audit` 表只追加，不要为了瘦身删历史；需要归档时导出 CSV 再清。
+- **判断留痕**：`runs.judgments` 存规则判断、采用版本、被拒原因与模型原始输出，
+  是 `audit` 之外的第二条审计链；体积随判断条数增长，列表接口不返回该字段。
 - **密钥**：`settings` 表里的模型配置含 API Key 明文，数据库备份、只读账号与
   慢查询日志都应按密钥对待；页面与接口不会回传明文，只给尾号。
 

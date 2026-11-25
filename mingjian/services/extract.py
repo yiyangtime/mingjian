@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from ..core import verify as V
 from ..core.textproc import best_quote, cjk_count, clip, looks_tabular, norm, similarity, strip_tags
 from ..infra import optstore
 
@@ -156,6 +157,8 @@ class Fact:
     dedupe_key: str
     doc_id: str = ""
     corroboration: int = 1
+    conflict: int = 0
+    conflict_note: str = ""
 
     def as_dict(self) -> dict:
         return {
@@ -164,6 +167,7 @@ class Fact:
             "amount": self.amount, "event_date": self.event_date,
             "confidence": round(self.confidence, 2), "dedupe_key": self.dedupe_key,
             "doc_id": self.doc_id, "corroboration": self.corroboration,
+            "conflict": self.conflict, "conflict_note": self.conflict_note,
         }
 
 
@@ -318,6 +322,10 @@ def merge_facts(facts: list[Fact], threshold: float = 0.46) -> list[Fact]:
     """
     跨源合并：同一事件被多家报道时，保留置信度高的一条，并把佐证数累加。
     佐证数本身是信号——单源消息和五家媒体同时报，可信度不同。
+
+    但“多家报道”不等于“互相印证”：两条报道对金额/规模的写法不一致时，
+    不能当互证加分，必须显式记为口径冲突并下调置信度——否则合并会把
+    矛盾抹平，读者只看到一条“高置信”事实。
     """
     kept: list[Fact] = []
     for f in sorted(facts, key=lambda x: -x.confidence):
@@ -336,16 +344,61 @@ def merge_facts(facts: list[Fact], threshold: float = 0.46) -> list[Fact]:
                     dup = k
                     break
         if dup:
-            dup.corroboration += 1
-            if f.confidence > dup.confidence:
-                dup.confidence = min(0.98, f.confidence + 0.02 * (dup.corroboration - 1))
-                dup.evidence_quote = f.evidence_quote or dup.evidence_quote
-                dup.doc_id = f.doc_id or dup.doc_id
+            note = _figure_conflict(dup, f)
+            if note:
+                # 冲突来源不算“互相印证”，只记冲突；佐证数留待真正一致的来源累加
+                dup.conflict += 1
+                dup.conflict_note = clip(_join_notes(dup.conflict_note, note), 240)
+                dup.confidence = max(0.30, dup.confidence - CONFLICT_PENALTY)
             else:
-                dup.confidence = min(0.98, dup.confidence + 0.015 * (dup.corroboration - 1))
+                dup.corroboration += 1
+                if f.confidence > dup.confidence:
+                    dup.confidence = min(0.98, f.confidence + 0.02 * (dup.corroboration - 1))
+                    dup.evidence_quote = f.evidence_quote or dup.evidence_quote
+                    dup.doc_id = f.doc_id or dup.doc_id
+                else:
+                    dup.confidence = min(0.98, dup.confidence + 0.015 * (dup.corroboration - 1))
         else:
             kept.append(f)
     return kept
+
+
+CONFLICT_PENALTY = 0.06
+
+
+def _figure_conflict(a: Fact, b: Fact) -> str:
+    """同一事件、两种口径：同一指标族（金额/产能/占比）的取值不重合才算冲突。
+
+    不能拿全句数字集合求交：旧实现下「投资5亿元、产能10万吨」与
+    「投资5亿元、产能8万吨」只因为金额相同就被当成一致，产能差异被抹平。
+    """
+    ga, gb = V.figure_groups(a.statement), V.figure_groups(b.statement)
+
+    def show(group: list[tuple[str, str]]) -> str:
+        labels: list[str] = []
+        for _key, raw in group:
+            if raw not in labels:
+                labels.append(raw)
+        return "、".join(labels[:3]) or "—"
+
+    for fam, items in ga.items():
+        other = gb.get(fam)
+        if not other:
+            continue
+        if {k for k, _ in items} & {k for k, _ in other}:
+            continue
+        left = a.doc_id or "先收录来源"
+        right = b.doc_id or "后收录来源"
+        return f"{left} 记 {show(items)}，{right} 记 {show(other)}"
+    return ""
+
+
+def _join_notes(old: str, new: str) -> str:
+    if not old:
+        return new
+    if new in old:
+        return old
+    return f"{old}；{new}"
 
 
 _NUM = re.compile(r"\d+(?:\.\d+)?")

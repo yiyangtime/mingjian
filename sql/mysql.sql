@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS `runs` (
   `finished_at` VARCHAR(255),
   `params` TEXT,
   `stats` TEXT,
+  `judgments` TEXT,
   `error` TEXT
 );
 
@@ -61,6 +62,8 @@ CREATE TABLE IF NOT EXISTS `facts` (
   `confidence` DOUBLE,
   `dedupe_key` VARCHAR(255),
   `corroboration` INT DEFAULT 1,
+  `conflict` INT DEFAULT 0,
+  `conflict_note` TEXT,
   `created_at` VARCHAR(255),
   KEY `idx_fact_run` (`run_id`),
   KEY `idx_fact_entity` (`entity_key`)

@@ -1,9 +1,9 @@
-"""接入中心路由：模型接入与工商数据源的保存、启用、删除与连接测试。"""
+"""接入中心路由：模型接入、工商数据源与报告推送的保存、启停、删除与连接测试。"""
 from __future__ import annotations
 
 from fastapi import APIRouter, Body, HTTPException
 
-from ...infra import llmcfg, registry, store
+from ...infra import llmcfg, push, registry, store
 
 router = APIRouter(tags=["接入中心"])
 
@@ -100,5 +100,54 @@ def test_registry(data: dict | None = Body(default=None)):
     data = data or {}
     try:
         return registry.probe(data)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/api/access/push/config")
+def get_push_config():
+    return push.public()
+
+
+@router.post("/api/access/push/config")
+def save_push_config(data: dict | None = Body(default=None)):
+    """报告推送渠道。Webhook 路径与密钥只落库，前端只拿得到尾号。"""
+    data = data or {}
+    actor = str(data.get("actor") or "").strip() or "业务用户"
+    action = str(data.get("action") or "").strip()
+    target = str(data.get("name") or data.get("id") or "").strip()
+    try:
+        if action == "toggle":
+            on = bool(data.get("enabled"))
+            out = push.toggle_channel(str(data.get("id") or ""), on)
+            store.add_audit("", "", "push_toggle", target,
+                            reason="启用推送渠道" if on else "停用推送渠道", actor=actor)
+        elif action == "delete":
+            out = push.delete_channel(str(data.get("id") or ""))
+            store.add_audit("", "", "push_delete", target, reason="删除推送渠道", actor=actor)
+        elif action == "options":
+            out = push.set_options(auto=data.get("auto"), base_url=data.get("base_url"))
+            store.add_audit("", "", "push_options", "",
+                            reason=f"自动推送{'开' if out.get('auto') else '关'}", actor=actor)
+        elif action in ("", "save"):
+            out = push.save_channel(data)
+            store.add_audit("", "", "push_config", target or str(data.get("type") or ""),
+                            reason="保存推送渠道", actor=actor)
+        else:
+            raise HTTPException(400, "不支持的操作")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"配置保存失败：{type(e).__name__}: {e}")
+    return {"ok": True, **out}
+
+
+@router.post("/api/access/push/test")
+def test_push(data: dict | None = Body(default=None)):
+    data = data or {}
+    try:
+        return push.probe(data)
     except ValueError as e:
         raise HTTPException(400, str(e))

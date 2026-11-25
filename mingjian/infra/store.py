@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS runs (
   finished_at TEXT,
   params TEXT,
   stats TEXT,
+  judgments TEXT,                -- 判断改写留痕：规则版 / 采用版 / 被拒原因
   error TEXT
 );
 
@@ -89,6 +90,8 @@ CREATE TABLE IF NOT EXISTS facts (
   confidence REAL,
   dedupe_key TEXT,
   corroboration INTEGER DEFAULT 1,
+  conflict INTEGER DEFAULT 0,     -- 与其它来源口径冲突的条数
+  conflict_note TEXT,            -- 冲突说明（金额/规模不一致）
   created_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_fact_run ON facts(run_id);
@@ -234,7 +237,11 @@ def ddl_statements() -> list[str]:
 
 
 # 旧库补列：CREATE TABLE IF NOT EXISTS 不会改动已有表，升级后在这里按需加列
-_PATCH_COLUMNS = {"companies": (("website", "TEXT"),)}
+_PATCH_COLUMNS = {
+    "companies": (("website", "TEXT"),),
+    "runs": (("judgments", "TEXT"),),
+    "facts": (("conflict", "INTEGER DEFAULT 0"), ("conflict_note", "TEXT")),
+}
 
 
 def _patch_columns(c: dbmod.Conn) -> None:
@@ -354,6 +361,24 @@ def finish_run(run_id: str, status: str, stats: dict | None = None, error: str |
     with tx() as c:
         c.execute("UPDATE runs SET status=?, finished_at=?, stats=?, error=? WHERE id=?",
                   (status, now(), json.dumps(stats or {}, ensure_ascii=False), error, run_id))
+
+
+def save_judgments(run_id: str, payload: dict) -> None:
+    """判断留痕入库：规则版、采用版、被拒原因与模型原始输出都存一份。"""
+    with tx() as c:
+        c.execute("UPDATE runs SET judgments=? WHERE id=?",
+                  (json.dumps(payload, ensure_ascii=False), run_id))
+
+
+def judgments_of_run(run_id: str) -> dict | None:
+    row = conn().execute("SELECT judgments FROM runs WHERE id=?", (run_id,)).fetchone()
+    if not row or not row["judgments"]:
+        return None
+    try:
+        data = json.loads(row["judgments"])
+    except Exception:  # noqa: BLE001
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def get_run(run_id: str):
@@ -512,7 +537,7 @@ def facts_of_run(run_id: str):
 
 _FACT_COLS = ("id", "run_id", "entity_key", "doc_id", "type", "type_label", "statement",
               "evidence_quote", "amount", "event_date", "confidence", "dedupe_key",
-              "corroboration", "created_at")
+              "corroboration", "conflict", "conflict_note", "created_at")
 
 
 def save_facts(run_id: str, entity_key: str, facts: list[dict]) -> None:
@@ -531,7 +556,8 @@ def save_facts(run_id: str, entity_key: str, facts: list[dict]) -> None:
                 (fid, run_id, entity_key, f.get("doc_id", ""), f.get("type", ""),
                  f.get("type_label", ""), f.get("statement", ""), f.get("evidence_quote", ""),
                  f.get("amount", ""), f.get("event_date", ""), f.get("confidence", 0),
-                 f.get("dedupe_key", ""), f.get("corroboration", 1), now()))
+                 f.get("dedupe_key", ""), f.get("corroboration", 1),
+                 int(f.get("conflict") or 0), f.get("conflict_note", ""), now()))
 
 
 def facts_with_doc(limit: int = 200, entity_key: str = ""):
