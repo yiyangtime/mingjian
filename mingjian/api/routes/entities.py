@@ -13,7 +13,7 @@ from ...runtime import compare
 from ...services import discover, subject
 from ..deps import PROFILE_TTL, profile_cache
 
-router = APIRouter(tags=["企业与主体"])
+router = APIRouter(tags=["企业洞察"])
 
 
 # 名字互含且长度足够、或 3-gram 高度重合，视为同一主体（简称 vs 工商全称）
@@ -75,7 +75,8 @@ def _registry_matches(q: str, limit: int) -> tuple[list[dict], str]:
                     "credit_code": row.get("credit_code") or "",
                     "reg_status": row.get("reg_status") or "",
                     "reg_capital": row.get("reg_capital") or "",
-                    "establish_date": row.get("establish_date") or ""})
+                    "establish_date": row.get("establish_date") or "",
+                    "website": row.get("website") or ""})
 
     for row in store.search_companies(q, limit):
         add(dict(row))
@@ -89,7 +90,7 @@ def _registry_matches(q: str, limit: int) -> tuple[list[dict], str]:
     return out, ""
 
 
-@router.get("/api/entity/search")
+@router.get("/api/company/entity/search")
 def entity_search(q: str = "", limit: int = 8):
     """公司搜索：工商登记 + 上市公司库 + 本地档案 + 公开资讯主体。
 
@@ -147,7 +148,7 @@ def entity_search(q: str = "", limit: int = 8):
     return {"items": items[:limit], "notes": [reg_note] if reg_note else []}
 
 
-@router.get("/api/entity/profile")
+@router.get("/api/company/entity/profile")
 def entity_profile(name: str = "", code: str = "", market: str = ""):
     """公司档案补全：代码、类型、所处产业、主营。非上市退回企业自述档案。"""
     name, code, market = name.strip(), code.strip(), market.strip()
@@ -202,6 +203,7 @@ def entity_profile(name: str = "", code: str = "", market: str = ""):
         "reg_status": reg.get("reg_status") or "",
         "reg_capital": reg.get("reg_capital") or "",
         "establish_date": reg.get("establish_date") or "",
+        "website": prof.get("website") or reg.get("website") or "",
         "source": " · ".join(sources),
     }
     # 取不到任何字段时不缓存，避免自述档案后补后仍然命中空结果
@@ -210,7 +212,7 @@ def entity_profile(name: str = "", code: str = "", market: str = ""):
     return out
 
 
-@router.get("/api/subject")
+@router.get("/api/company/subject")
 def get_subject(key: str = ""):
     key = key.strip()
     if key:
@@ -223,7 +225,7 @@ def get_subject(key: str = ""):
     return {"subjects": subject.list_all(), "fields": subject.FIELDS}
 
 
-@router.post("/api/subject")
+@router.post("/api/company/subject")
 def save_subject(data: dict | None = Body(default=None)):
     data = data or {}
     try:
@@ -235,10 +237,10 @@ def save_subject(data: dict | None = Body(default=None)):
     return {"ok": True, "subject": s,
             "baseline": subject.baseline(s),
             "coverage": subject.coverage(s, compare.DIMENSIONS),
-            "note": "已存为企业自述基线，参与竞品周报时标为「企业自述」，不冒充公开事实"}
+            "note": "已存为企业自述基线，参与竞品追踪时标为「企业自述」，不冒充公开事实"}
 
 
-@router.post("/api/discover")
+@router.post("/api/company/discover")
 def discover_companies(data: dict | None = Body(default=None)):
     data = data or {}
     products = str(data.get("products") or "").strip()

@@ -412,7 +412,7 @@ function confirmField(): void {
 
 /* 本地先落 UI，服务端留痕异步写；写失败不影响复核流程，但要能看到提示 */
 function pushAudit(action: '确认' | '修正', field: FieldKey, oldValue: string, newValue: string, reason: string): void {
-  api.post('/api/policy/confirm', {
+  api.post('/api/policy-radar/confirm', {
     doc: curDoc.value?.id || '-',
     field,
     action: action === '确认' ? 'confirm' : 'correct',
@@ -480,7 +480,7 @@ function readFiles(files: File[]): void {
     }
     try {
       const d = await api.post<{ docs: Partial<PolicyDoc>[]; stats?: { locatable?: number }; skipped?: string[] }>(
-        '/api/policy/parse', { files: payload },
+        '/api/policy-radar/parse', { files: payload },
       )
       const added = addDocs(d.docs || [])
       const skipped = d.skipped || []
@@ -505,7 +505,7 @@ async function doPaste(): Promise<void> {
     return
   }
   try {
-    const d = await api.post<{ docs: Partial<PolicyDoc>[] }>('/api/policy/parse', {
+    const d = await api.post<{ docs: Partial<PolicyDoc>[] }>('/api/policy-radar/parse', {
       files: [{ name, b64: b64EncodeUtf8(text) }],
     })
     if (!(d.docs || []).length) {
@@ -525,7 +525,7 @@ async function doPaste(): Promise<void> {
 
 async function loadFromServer(manual: boolean): Promise<void> {
   try {
-    const d = await api.get<{ docs: Partial<PolicyDoc>[]; dir?: string; skipped?: string[] }>('/api/policy/scan')
+    const d = await api.get<{ docs: Partial<PolicyDoc>[]; dir?: string; skipped?: string[] }>('/api/policy-radar/scan')
     const list = d.docs || []
     scanInfo.value = { skipped: d.skipped }
     if (!list.length) {
@@ -578,7 +578,7 @@ function govLog(msg: string, kind = ''): void {
 
 async function loadGovHealth(): Promise<void> {
   try {
-    const d = await api.get<{ unavailable?: string[] }>('/api/policy/gov/health')
+    const d = await api.get<{ unavailable?: string[] }>('/api/policy-radar/gov/health')
     const bad = d.unavailable || []
     if (!bad.length) return
     gov.note = `站点：工业和信息化部 · 各省工业和信息化厅　已知取不到：${bad.join('、')}（请改用下方材料上传）`
@@ -604,7 +604,7 @@ async function fetchGov(): Promise<void> {
       logs?: { msg: string; kind?: string }[]; docs?: Partial<PolicyDoc>[]
       sources?: { level: string; keyword?: string; ok: boolean; got?: number; name: string }[]
       warnings?: string[]; cached?: boolean; stats?: { ok?: number; partial?: number; failed?: number; fields?: number }
-    }>('/api/policy/gov', q)
+    }>('/api/policy-radar/gov', q)
     const ind = d.industry
       ? `行业：${d.industry}${d.industry_source === '企业自述档案' ? '（取自自述档案，非公开档案）' : ''}`
       : '行业：未识别'

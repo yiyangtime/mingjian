@@ -114,7 +114,7 @@ def rules_for_version(version: str) -> list[dict]:
                 return rules
     return default_rules()
 
-# 例行公告没有情报价值，直接跳过（否则周报会被"翌日披露报表"淹没）
+# 例行公告没有情报价值，直接跳过（否则报告会被"翌日披露报表"淹没）
 ROUTINE = re.compile(
     r"翌日披露报表|证券变动月报表|月报表|会议召开日期|持续关连交易|"
     r"关于召开.*股东大会.*通知|独立董事.*候选人|章程修正案|"

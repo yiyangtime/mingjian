@@ -221,6 +221,7 @@ TABLES: tuple[Table, ...] = (
             Col("reg_status"),
             Col("establish_date"),
             Col("location", "text"),
+            Col("website"),                           # 公司官网
             Col("industry"),
             Col("business", "long"),
             Col("source"),                          # 工商接口标识

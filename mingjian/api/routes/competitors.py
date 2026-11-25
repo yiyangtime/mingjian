@@ -1,4 +1,4 @@
-"""竞品周报路由：多家公司逐家跑完整链路后按事件维度对比。"""
+"""竞品追踪路由：多家公司逐家跑完整链路后按事件维度对比。"""
 from __future__ import annotations
 
 from fastapi import APIRouter, Body, HTTPException
@@ -6,10 +6,10 @@ from fastapi import APIRouter, Body, HTTPException
 from ...config import CFG
 from ...runtime import jobs
 
-router = APIRouter(tags=["竞品对比"])
+router = APIRouter(tags=["竞品追踪"])
 
 
-@router.post("/api/compare")
+@router.post("/api/competitor-tracking/compare")
 def start_compare(data: dict | None = Body(default=None)):
     data = data or {}
     names = [c.strip() for c in (data.get("companies") or []) if c and c.strip()]

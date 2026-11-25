@@ -9,7 +9,7 @@ from fastapi import APIRouter, Body, HTTPException
 from ...infra import scheduler, store
 from ...runtime import jobs
 
-router = APIRouter(tags=["定时调度"])
+router = APIRouter(tags=["运行治理"])
 
 
 def _save_schedule_body(data: dict) -> dict:
@@ -35,15 +35,15 @@ def _save_schedule_body(data: dict) -> dict:
     if kind == "compare":
         names = [str(c).strip() for c in (params.get("companies") or []) if str(c).strip()]
         if len(names) < 2:
-            raise ValueError("竞品周报至少需要两家公司")
+            raise ValueError("竞品追踪至少需要两家公司")
         params = {**params, "companies": names[:6]}
-        default_name = " · ".join(names[:3]) + (" 等" if len(names) > 3 else "") + " 竞品周报"
+        default_name = " · ".join(names[:3]) + (" 等" if len(names) > 3 else "") + " 竞品追踪报告"
     else:
         company = str(params.get("company") or "").strip()
         if not company:
             raise ValueError("请提供公司名称")
         params = {**params, "company": company}
-        default_name = company + " 情报"
+        default_name = company + " 企业洞察"
 
     sid = str(data.get("id") or "").strip()
     if not sid:
@@ -58,7 +58,7 @@ def _save_schedule_body(data: dict) -> dict:
     })
 
 
-@router.get("/api/schedules")
+@router.get("/api/governance/schedules")
 def list_schedules():
     rows = store.list_schedules()
     for s in rows:
@@ -66,7 +66,7 @@ def list_schedules():
     return {"schedules": rows, "running": scheduler.running()}
 
 
-@router.post("/api/schedules")
+@router.post("/api/governance/schedules")
 def save_schedule(data: dict | None = Body(default=None)):
     data = data or {}
     try:
@@ -79,7 +79,7 @@ def save_schedule(data: dict | None = Body(default=None)):
     return {"ok": True, "schedule": s}
 
 
-@router.post("/api/schedules/delete")
+@router.post("/api/governance/schedules/delete")
 def delete_schedule(data: dict | None = Body(default=None)):
     data = data or {}
     sid = (data.get("id") or "").strip()
@@ -90,7 +90,7 @@ def delete_schedule(data: dict | None = Body(default=None)):
     return {"ok": True}
 
 
-@router.post("/api/schedules/toggle")
+@router.post("/api/governance/schedules/toggle")
 def toggle_schedule(data: dict | None = Body(default=None)):
     data = data or {}
     sid = (data.get("id") or "").strip()
@@ -105,7 +105,7 @@ def toggle_schedule(data: dict | None = Body(default=None)):
     return {"ok": True, "schedule": store.get_schedule(sid)}
 
 
-@router.post("/api/schedules/run")
+@router.post("/api/governance/schedules/run")
 def run_schedule(data: dict | None = Body(default=None)):
     data = data or {}
     s = store.get_schedule((data.get("id") or "").strip())

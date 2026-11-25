@@ -156,10 +156,10 @@ _REGISTRY: list[dict] = [
             "confidence": _f("number", "置信度 0—1", min=0, max=1)},
            _memory_remember),
     # 流水线内部步骤：只登记，不开放单独执行
-    _skill("run.pipeline", "完整情报运行", "internal", "network",
+    _skill("run.pipeline", "企业洞察完整运行", "internal", "network",
            "实体解析 → 多源采集 → 正文抓取 → 事实抽取 → 变化比对 → 成稿 → 入库。",
            {"company": _f("string", "公司名称", required=True, max_len=60)}, None, True),
-    _skill("run.compare", "竞品周报", "internal", "network",
+    _skill("run.compare", "竞品追踪报告", "internal", "network",
            "多主体并跑 + 矩阵归并 + 差异高亮，按周输出。",
            {"companies": _f("array", "对比公司列表", required=True)}, None, True),
 ]

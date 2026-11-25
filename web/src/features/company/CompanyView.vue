@@ -84,7 +84,7 @@ function saveLastRun(res: RunResult): void {
 /* ---------- 引擎与历史 ---------- */
 async function loadHealth(): Promise<void> {
   try {
-    const d = await api.get<Health>('/api/health')
+    const d = await api.get<Health>('/api/governance/health')
     engineText.value = d.llm ? `模型已接入 · ${d.model || ''}` : '规则引擎（未配模型密钥）'
   } catch {
     engineText.value = '服务未连接'
@@ -95,7 +95,7 @@ async function loadHistory(reset = true): Promise<void> {
   if (reset) histOffset.value = 0
   histBusy.value = true
   try {
-    const d = await api.get<{ runs: RunSummary[]; total?: number }>('/api/runs', {
+    const d = await api.get<{ runs: RunSummary[]; total?: number }>('/api/company/runs', {
       limit: HIST_PAGE,
       offset: histOffset.value,
       q: histQ.value.trim() || undefined,
@@ -190,7 +190,7 @@ function startPoll(id: string, since = 0): void {
         finish(d.result)
         return
       }
-      // 重启后竞品周报没有内存矩阵：退到报告文件，不无限轮询
+      // 重启后竞品追踪没有内存矩阵：退到报告文件，不无限轮询
       toast('结果明细不在内存中，已打开报告文件')
       openHist(id)
     },
@@ -234,7 +234,7 @@ async function start(): Promise<void> {
   startElapsed()
   addLog('提交任务：' + c)
   try {
-    const d = await api.post<{ run_id: string }>('/api/run', {
+    const d = await api.post<{ run_id: string }>('/api/company/run', {
       company: c,
       days: Number(days.value) || 30,
       max_fetch: Number(fetchN.value) || 12,
@@ -307,7 +307,7 @@ async function cancel(): Promise<void> {
   if (!lastId.value) return
   cancelBusy.value = true
   try {
-    await api.post(`/api/run/${lastId.value}/cancel`)
+    await api.post(`/api/company/run/${lastId.value}/cancel`)
     stateText.value = '取消中'
     toast('已发出取消信号，当前步骤结束后停止')
   } catch (e) {
@@ -327,7 +327,7 @@ async function resume(): Promise<void> {
   running.value = true
   startElapsed()
   try {
-    const d = await api.post<{ from_step?: number }>(`/api/run/${lastId.value}/resume`)
+    const d = await api.post<{ from_step?: number }>(`/api/company/run/${lastId.value}/resume`)
     toast(d.from_step ? `从第 ${d.from_step} 步续跑` : '没有检查点，从头重跑')
     startPoll(lastId.value)
   } catch (e) {
@@ -460,7 +460,7 @@ async function audit(action: 'confirm' | 'reject'): Promise<void> {
   const res = result.value
   if (!cur || !res) return
   try {
-    await api.post('/api/audit', {
+    await api.post('/api/governance/audit', {
       entity_key: res.entity_key || res.entity?.code || res.company,
       run_id: res.run_id,
       action,
@@ -489,7 +489,7 @@ async function openHist(id: string): Promise<void> {
   const tb = route.query.tab
   const fc = route.query.fact
   try {
-    const d = await api.get<RunPoll>(`/api/run/${id}`)
+    const d = await api.get<RunPoll>(`/api/company/run/${id}`)
     lastId.value = id
     runCompany.value = d.company || ''
     if (d.result) {
@@ -506,7 +506,7 @@ async function openHist(id: string): Promise<void> {
       resumable.value = false
       syncUrl(id)
       try {
-        const text = await api.text(`/api/report/${id}.md`)
+        const text = await api.text(`/api/company/report/${id}.md`)
         const res: RunResult = {
           run_id: id, company: d.company || '', docs: [], facts: [],
           changes: { has_baseline: false, baseline_count: 0, new: [], escalated: [], faded: [] },
@@ -552,7 +552,7 @@ async function openHist(id: string): Promise<void> {
 /* ---------- 定时任务 ---------- */
 async function loadSchedules(): Promise<void> {
   try {
-    const d = await api.get<{ schedules: Schedule[] }>('/api/schedules')
+    const d = await api.get<{ schedules: Schedule[] }>('/api/governance/schedules')
     schedules.value = d.schedules || []
   } catch {
     schedules.value = []
@@ -570,9 +570,9 @@ async function addSchedule(): Promise<void> {
   const spec: Record<string, unknown> = { freq: schedForm.freq, time: schedForm.time || '09:00' }
   if (schedForm.freq === 'weekly') spec.weekday = Number(schedForm.weekday) || 1
   try {
-    const d = await api.post<{ schedule: Schedule }>('/api/schedules', {
+    const d = await api.post<{ schedule: Schedule }>('/api/governance/schedules', {
       kind: 'run',
-      name: c + ' 情报',
+      name: c + ' 企业洞察',
       params: { company: c, days: Number(schedForm.days) || 30 },
       spec,
       enabled: true,
@@ -586,7 +586,7 @@ async function addSchedule(): Promise<void> {
 }
 
 async function schedAct(action: 'run' | 'toggle' | 'del', id: string): Promise<void> {
-  const url = { run: '/api/schedules/run', toggle: '/api/schedules/toggle', del: '/api/schedules/delete' }[action]
+  const url = { run: '/api/governance/schedules/run', toggle: '/api/governance/schedules/toggle', del: '/api/governance/schedules/delete' }[action]
   const body: Record<string, unknown> = { id }
   if (action === 'toggle') {
     const s = schedules.value.find((x) => x.id === id)
@@ -630,8 +630,8 @@ async function download(kind: 'md' | 'csv'): Promise<void> {
   const name = result.value?.company || runCompany.value || rid
   try {
     const got = await api.download(
-      kind === 'md' ? `/api/report/${rid}.md` : `/api/facts/${rid}.csv`,
-      kind === 'md' ? `${name}_情报报告_${rid}.md` : `${name}_事实表_${rid}.csv`,
+      kind === 'md' ? `/api/company/report/${rid}.md` : `/api/company/facts/${rid}.csv`,
+      kind === 'md' ? `${name}_企业洞察报告_${rid}.md` : `${name}_事实表_${rid}.csv`
     )
     toast(`已下载 ${got}`)
   } catch (e) {
@@ -652,7 +652,7 @@ async function harvestMemory(): Promise<void> {
   if (!rid || harvestBusy.value) return
   harvestBusy.value = true
   try {
-    const d = await api.post<{ written?: number }>('/api/memory/harvest', { run_id: rid, limit: 12 })
+    const d = await api.post<{ written?: number }>('/api/research-assistant/memory/harvest', { run_id: rid, limit: 12 })
     toast(`已沉淀 ${d.written || 0} 条记忆，下次分析同类公司会自动带上`)
   } catch (e) {
     toast('沉淀失败：' + (e as Error).message)
@@ -860,7 +860,7 @@ onMounted(() => {
         <div class="tabs">
           <div class="seg">
             <div v-if="!reportOnly" class="seg-i" :class="{ on: tab === 'facts' }" @click="tab = 'facts'">事实清单<span class="seg-n">{{ facts.length }}</span></div>
-            <div class="seg-i" :class="{ on: tab === 'report' }" @click="tab = 'report'">情报报告</div>
+            <div class="seg-i" :class="{ on: tab === 'report' }" @click="tab = 'report'">企业洞察报告</div>
             <div v-if="!reportOnly" class="seg-i" :class="{ on: tab === 'quality' }" @click="tab = 'quality'">质量与缺口</div>
           </div>
           <div class="spacer"></div>

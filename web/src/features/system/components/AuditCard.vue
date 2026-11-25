@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/** 审计日志：筛选条件用 v-model 回写视图，读取与分页仍由视图负责。 */
+/** 审计日志：筛选条件用 v-model 回写视图，读取仍由视图负责。 */
 import { computed, nextTick } from 'vue'
 import type { AuditRow } from '../types'
 
@@ -27,13 +27,17 @@ function refresh(): void {
 }
 
 const ACTION_LABEL: Record<string, string> = {
-  llm_config: '保存模型配置', llm_clear: '清除模型配置', skill_run: '执行技能',
-  memory_write: '写入记忆', memory_delete: '删除记忆', memory_harvest: '沉淀记忆',
-  cancel: '取消运行', resume: '断点续跑', confirm: '确认事实', correct: '修正字段',
+  llm_config: '保存模型配置', llm_clear: '清除模型配置', llm_activate: '启用模型配置',
+  llm_delete: '删除模型配置',
+  registry_config: '保存工商数据源', registry_activate: '启用工商数据源',
+  registry_delete: '删除工商数据源', registry_clear: '停用工商数据源',
+  skill_run: '执行技能', memory_write: '写入记忆', memory_delete: '删除记忆',
+  memory_harvest: '沉淀记忆', cancel: '取消运行', resume: '断点续跑',
+  enqueue: '定时入队', run: '自动生成', confirm: '确认事实', correct: '修正字段',
   reject: '事实存疑', note: '备注', parse: '解析材料', gov_fetch: '抓取政策',
-  run: '提交分析', subject_create: '新建主体档案', subject_save: '保存主体档案',
-  schedule_save: '保存定时任务', schedule_delete: '删除定时任务', schedule_toggle: '启停定时任务',
-  llm_activate: '启用模型配置', llm_delete: '删除模型配置',
+  subject_create: '新建主体档案', subject_save: '保存主体档案',
+  schedule_save: '保存定时任务', schedule_delete: '删除定时任务',
+  schedule_toggle: '启停定时任务',
 }
 
 function actionLabel(a?: string): string {
@@ -42,7 +46,7 @@ function actionLabel(a?: string): string {
 </script>
 
 <template>
-  <section class="card section-gap">
+  <section class="card">
     <div class="card-h">
       <h3>审计日志</h3>
       <span class="cnt">{{ total }}</span>
@@ -80,7 +84,6 @@ function actionLabel(a?: string): string {
 .card-h { padding: 14px 18px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .card-h h3 { margin: 0; font-size: 14.5px; font-weight: 650; }
 .cnt { font-size: 11.5px; color: var(--mute); }
-.section-gap { margin-top: 18px; }
 
 .atools { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .atools input { width: 240px; }

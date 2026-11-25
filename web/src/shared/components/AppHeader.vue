@@ -17,12 +17,13 @@ const route = useRoute()
 
 // 导航只有一份定义：改名改这里，所有页面自动一致
 const items: { to: string; label: string; icon: NavIconName }[] = [
-  { to: '/', label: '公司情报', icon: 'company' },
-  { to: '/policy', label: '政策公告', icon: 'policy' },
-  { to: '/competitor', label: '竞品周报', icon: 'competitor' },
-  { to: '/metrics', label: '指标联动', icon: 'metrics' },
-  { to: '/agent', label: '智能体', icon: 'agent' },
-  { to: '/settings', label: '接入配置', icon: 'settings' },
+  { to: '/', label: '企业洞察', icon: 'company' },
+  { to: '/policy-radar', label: '政策雷达', icon: 'policy' },
+  { to: '/competitor-tracking', label: '竞品追踪', icon: 'competitor' },
+  { to: '/metric-insight', label: '指标透视', icon: 'metrics' },
+  { to: '/research-assistant', label: '研究助理', icon: 'agent' },
+  { to: '/governance', label: '运行治理', icon: 'monitor' },
+  { to: '/access-center', label: '接入中心', icon: 'settings' },
 ]
 
 const path = computed(() => route.path)
@@ -36,7 +37,7 @@ let pingTimer: number | undefined
 
 async function ping(): Promise<void> {
   try {
-    health.value = await api.get<{ ok: boolean; version?: string; llm?: boolean }>('/api/health')
+    health.value = await api.get<{ ok: boolean; version?: string; llm?: boolean }>('/api/governance/health')
   } catch {
     health.value = { ok: false }
   }
@@ -148,7 +149,7 @@ onBeforeUnmount(() => {
   overflow-x: auto; scrollbar-width: none;
 }
 .nav::-webkit-scrollbar { display: none; }
-/* 六个入口各用一组渐变：文字、图标与选中光晕同色系，互不混淆 */
+/* 七个入口各用一组渐变：文字、图标与选中光晕同色系，互不混淆 */
 .nav a {
   --c1: #1D4ED8;
   --c2: #0369A1;
@@ -166,6 +167,7 @@ onBeforeUnmount(() => {
 .nav a[data-tone="competitor"] { --c1: #C2410C; --c2: #BE123C; }
 .nav a[data-tone="metrics"] { --c1: #047857; --c2: #0F766E; }
 .nav a[data-tone="agent"] { --c1: #BE185D; --c2: #A21CAF; }
+.nav a[data-tone="monitor"] { --c1: #475569; --c2: #1E293B; }
 .nav a[data-tone="settings"] { --c1: #B45309; --c2: #A16207; }
 .nav a .nav-label { color: var(--c1); }
 @supports ((-webkit-background-clip: text) or (background-clip: text)) {

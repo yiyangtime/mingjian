@@ -9,10 +9,10 @@ from ...infra.sources import cninfo
 from ...services import metrics, topic
 from ..deps import latest_facts, truthy
 
-router = APIRouter(tags=["指标与专题"])
+router = APIRouter(tags=["指标透视"])
 
 
-@router.get("/api/metrics")
+@router.get("/api/metric-insight/overview")
 def get_metrics(company: str = "", refresh: str = "0"):
     company = company.strip()
     if not company:
@@ -29,7 +29,7 @@ def get_metrics(company: str = "", refresh: str = "0"):
     return out
 
 
-@router.get("/api/topic")
+@router.get("/api/metric-insight/topic")
 def get_topic(company: str = "", refresh: str = "0", kind: str = ""):
     company = company.strip()
     if not company:
@@ -47,7 +47,7 @@ def get_topic(company: str = "", refresh: str = "0", kind: str = ""):
     return out
 
 
-@router.post("/api/metrics/query")
+@router.post("/api/metric-insight/query")
 def query_metrics(data: dict | None = Body(default=None)):
     data = data or {}
     company = str(data.get("company") or "").strip()

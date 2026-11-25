@@ -1,4 +1,4 @@
-"""运行状态与审计路由：健康检查、系统信息、审计日志读写。"""
+"""运行治理路由：健康检查、系统信息、审计日志读写。"""
 from __future__ import annotations
 
 import platform
@@ -12,7 +12,7 @@ from ...config import CFG, OUT_DIR, ROOT
 from ...infra import scheduler, store
 from ..deps import START
 
-router = APIRouter(tags=["系统与审计"])
+router = APIRouter(tags=["运行治理"])
 
 
 def _display_path(value: str, fallback: str) -> str:
@@ -25,14 +25,14 @@ def _display_path(value: str, fallback: str) -> str:
         return fallback
 
 
-@router.get("/api/health")
+@router.get("/api/governance/health")
 def health():
     return {"ok": True, "llm": CFG.llm_enabled,
             "model": CFG.llm_model or "rule-engine", "server": "fastapi",
             "version": __version__, "uptime_sec": int(time.time() - START)}
 
 
-@router.get("/api/system")
+@router.get("/api/governance/system")
 def system_info():
     reports = len(list(OUT_DIR.glob("*.md")))
     exports = len(list(OUT_DIR.glob("*.csv")))
@@ -57,7 +57,7 @@ def system_info():
     }
 
 
-@router.get("/api/audit")
+@router.get("/api/governance/audit")
 def list_audit(limit: int = 50, q: str = "", action: str = ""):
     limit = max(1, min(200, limit))
     q, action = q.strip(), action.strip()
@@ -72,7 +72,7 @@ def list_audit(limit: int = 50, q: str = "", action: str = ""):
     return {"audit": rows[:limit], "total": len(rows), "actions": actions}
 
 
-@router.post("/api/audit")
+@router.post("/api/governance/audit")
 def add_audit(data: dict | None = Body(default=None)):
     data = data or {}
     try:

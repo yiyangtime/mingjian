@@ -292,6 +292,7 @@ def profile(code: str, market: str = "") -> dict:
         "main_business": (r.get("MAIN_BUSINESS") or "").replace(",", "，"),
         "profile": (r.get("ORG_PROFILE") or "").strip(),
         "address": r.get("REG_ADDRESS") or "",
+        "website": (r.get("ORG_WEB") or "").strip(),
         "founded": (r.get("FOUND_DATE") or "")[:10],
     }
 

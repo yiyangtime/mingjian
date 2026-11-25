@@ -26,17 +26,15 @@ LOG = _get_logger("api")
 
 DIST_DIR = ROOT / "web" / "dist"
 
-# OpenAPI 分组：路由按领域拆分，文档也按领域成组，避免 /api/openapi.json 一屏平铺
+# OpenAPI 分组：与七个工作台一一对应，文档也按领域成组，避免 /api/openapi.json 一屏平铺
 TAGS = [
-    {"name": "系统与审计", "description": "健康检查、系统信息、审计日志读写"},
-    {"name": "情报运行", "description": "发起 / 轮询 / 取消 / 续跑、报告与事实表"},
-    {"name": "企业与主体", "description": "实体搜索、公司档案、我方基线、竞品线索"},
-    {"name": "政策取数", "description": "政策目录扫描、文件解析、工信部与省厅官网取数"},
-    {"name": "指标与专题", "description": "经营指标、主营业务构成、专题归因"},
-    {"name": "智能体", "description": "技能注册表执行、跨运行记忆读写与沉淀"},
-    {"name": "竞品对比", "description": "多家公司按事件维度横向对比"},
-    {"name": "定时调度", "description": "每天 / 每周任务的增删改查与立即触发"},
-    {"name": "模型设置", "description": "模型接入配置、启用切换与连接测试"},
+    {"name": "企业洞察", "description": "发起 / 轮询 / 取消 / 续跑、报告与事实表、实体搜索与档案、定时计划"},
+    {"name": "政策雷达", "description": "政策目录扫描、文件解析、工信部与省厅官网取数"},
+    {"name": "竞品追踪", "description": "多家公司按事件维度横向对比"},
+    {"name": "指标透视", "description": "经营指标、主营业务构成、专题归因"},
+    {"name": "研究助理", "description": "技能注册表执行、跨运行记忆读写与沉淀"},
+    {"name": "运行治理", "description": "健康检查、系统信息、审计日志、定时任务与调度状态"},
+    {"name": "接入中心", "description": "模型与工商数据源接入配置、启用切换与连接测试"},
 ]
 
 
@@ -117,7 +115,7 @@ def create_app() -> FastAPI:
                 "<h1>前端尚未构建</h1>"
                 "<p>请先在本机执行：<code>cd web</code> → <code>npm install</code> → "
                 "<code>npm run build</code>，生成 <code>web/dist</code> 后重试。</p>"
-                "<p>后端接口不受影响，<code>/api/health</code> 可直接访问。</p>",
+                "<p>后端接口不受影响，<code>/api/governance/health</code> 可直接访问。</p>",
                 status_code=503,
                 headers={"Cache-Control": "no-store"},
             )

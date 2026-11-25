@@ -93,7 +93,7 @@ def cmd_resume(args) -> int:
         print(f"该运行状态为 {status}，只有 failed / cancelled 可以续跑")
         return 1
     if str(args.run_id).startswith("C"):
-        print("竞品周报暂不支持续跑，请重新发起一次。")
+        print("竞品追踪暂不支持续跑，请重新发起一次。")
         return 1
 
     try:
@@ -339,9 +339,9 @@ def cmd_sched(args) -> int:
                 print("该任务的公司列表不足两家，无法执行")
                 return 1
             res = compare.run(names, cfg=cfg, on_event=_mk_event_printer())
-            md = OUT_DIR / f"竞品周报_CLI_{s['id']}.md"
+            md = OUT_DIR / f"竞品追踪报告_CLI_{s['id']}.md"
             md.write_text(res["report"], encoding="utf-8")
-            print(f"周报：{md}")
+            print(f"追踪报告：{md}")
         else:
             company = str(params.get("company") or "").strip()
             if not company:
@@ -377,15 +377,15 @@ def cmd_sched(args) -> int:
     if args.companies:
         names = [c.strip() for c in args.companies.replace("，", ",").split(",") if c.strip()]
         if len(names) < 2:
-            print('竞品周报至少需要两家公司，用 --companies "A,B" 给出')
+            print('竞品追踪至少需要两家公司，用 --companies "A,B" 给出')
             return 1
         kind = "compare"
         params = {"companies": names[:6], "days": args.days, "max_fetch": args.fetch}
-        default_name = " · ".join(names[:3]) + (" 等" if len(names) > 3 else "") + " 竞品周报"
+        default_name = " · ".join(names[:3]) + (" 等" if len(names) > 3 else "") + " 竞品追踪报告"
     else:
         kind = "run"
         params = {"company": args.company.strip(), "days": args.days, "max_fetch": args.fetch}
-        default_name = args.company.strip() + " 情报"
+        default_name = args.company.strip() + " 企业洞察"
 
     seed = json.dumps(params, sort_keys=True, ensure_ascii=False)
     sid = args.id or f"S{time.strftime('%Y%m%d%H%M%S')}-{abs(hash(seed)) % 10000:04d}"
@@ -468,7 +468,7 @@ def cmd_peers(args) -> int:
         if ev.get("quote"):
             print(f"      原话：{ev['quote']}")
         print(f"      出处：{ev.get('date', '')} {ev.get('source', '')} {ev.get('url', '')}")
-    print("\n以上是线索不是结论：曝光频次不代表规模或份额；带代码的可直接进竞品周报。")
+    print("\n以上是线索不是结论：曝光频次不代表规模或份额；带代码的可直接进竞品追踪。")
     if args.csv:
         import csv
         with open(args.csv, "w", encoding="utf-8-sig", newline="") as fh:
@@ -748,7 +748,7 @@ def main(argv=None) -> int:
 
     sc = sub.add_parser("sched", help="管理定时任务（每天/每周，由 serve 进程触发）")
     sc.add_argument("--company", default="", help="公司名；与 --companies 二选一")
-    sc.add_argument("--companies", default="", help="竞品周报公司列表，逗号分隔，至少两家")
+    sc.add_argument("--companies", default="", help="竞品追踪公司列表，逗号分隔，至少两家")
     sc.add_argument("--daily", action="store_true", help="每天执行（默认）")
     sc.add_argument("--weekly", type=int, default=0, help="每周执行，1=周一 … 7=周日")
     sc.add_argument("--time", default="09:00", help="执行时间 HH:MM，默认 09:00")

@@ -1,9 +1,9 @@
 """
-竞品动态周报：一次输入多家公司，逐家跑完整链路，再横向对比成稿。
+竞品追踪报告：一次输入多家公司，逐家跑完整链路，再横向对比成稿。
 
-和「公司情报」的区别不在采集，在成稿口径：
+和「企业洞察」的区别不在采集，在成稿口径：
   · 单家报告回答"这家发生了什么"；
-  · 竞品周报回答"同一件事上，谁在动、动得多快、我方处在什么位置"。
+  · 竞品追踪回答"同一件事上，谁在动、动得多快、我方处在什么位置"。
 
 所以这里的判断必须挂在跨公司的事实编号上（如 H2-F03），不能只做词频统计。
 """
@@ -16,7 +16,7 @@ from ..infra import store
 from ..services import subject as SUB
 from . import pipeline
 
-# 竞品周报关注的维度，按事件类型对齐，避免各家分类不同导致不可比
+# 竞品追踪关注的维度，按事件类型对齐，避免各家分类不同导致不可比
 DIMENSIONS = [
     ("capacity", "产能与基地"),
     ("order", "订单与合作"),
@@ -150,7 +150,7 @@ def run(companies: list[str], cfg=None, on_event=None, reuse_hours: int = 24,
         "self_dims": SUB.coverage(self_pack.get("subject") or {}, DIMENSIONS)["filled"] if self_pack else 0,
     }
     emit({"type": "step", "idx": 5, "name": "成稿与校验", "status": "done",
-          "detail": f"周报 {len(report_md)} 字，判断 {len(judges)} 条，全部挂事实编号"})
+          "detail": f"追踪报告 {len(report_md)} 字，判断 {len(judges)} 条，全部挂事实编号"})
     return {"companies": packs, "matrix": matrix, "judgments": judges,
             "report": report_md, "stats": stats,
             "self": ({"company": self_pack["company"], "facts": self_pack["facts"],
@@ -183,7 +183,7 @@ def _self_pack(key: str, emit) -> dict | None:
 
 
 def _forward(e: dict, emit) -> None:
-    """把单家流水线的事件降级成周报进度，避免前端出现嵌套步骤条。"""
+    """把单家流水线的事件降级成追踪报告进度，避免前端出现嵌套步骤条。"""
     if e.get("type") == "step":
         return
     if e.get("type") == "log" and e.get("level") in ("warn", "error", "ok"):
@@ -274,7 +274,7 @@ def _render(packs: list[dict], matrix: list[dict], judges: list[dict], cfg,
     total = sum(len(p["facts"]) for p in packs)
     cols = ([self_pack] if self_pack else []) + packs
     L = []
-    L.append("# 竞品动态周报")
+    L.append("# 竞品追踪报告")
     L.append("")
     L.append(f"> 监测对象：{' · '.join(p['company'] for p in packs)}　|　"
              f"生成时间：{time.strftime('%Y-%m-%d %H:%M')}　|　"

@@ -120,7 +120,7 @@ function pick(s: Skill): void {
 }
 
 async function loadSkills(): Promise<void> {
-  const res = await api.get<SkillResp>('/api/skills')
+  const res = await api.get<SkillResp>('/api/research-assistant/skills')
   skills.value = res.skills || []
   kindLabels.value = res.kinds || {}
   const first = skills.value.find((s) => !s.internal) || skills.value[0]
@@ -136,7 +136,7 @@ function applyMem(res: MemoryResp): void {
 
 async function loadMem(): Promise<void> {
   try {
-    const res = await api.get<MemoryResp>('/api/memory', {
+    const res = await api.get<MemoryResp>('/api/research-assistant/memory', {
       q: q.value || undefined,
       kind: kindFilter.value || undefined,
       limit: 100,
@@ -162,7 +162,7 @@ async function runSkill(): Promise<void> {
   running.value = true
   result.value = null
   try {
-    const res = await api.post<RunResp>('/api/skills/run', { name: cur.value.name, args })
+    const res = await api.post<RunResp>('/api/research-assistant/skills/run', { name: cur.value.name, args })
     result.value = res
     if (!res.ok) toast(res.error || '执行失败')
     else toast(`${cur.value.title} 完成 · ${res.elapsed_ms} ms`)
@@ -184,7 +184,7 @@ async function addMem(): Promise<void> {
     .map((x) => x.trim())
     .filter(Boolean)
   try {
-    await api.post('/api/memory', {
+    await api.post('/api/research-assistant/memory', {
       scope: newMem.scope.trim() || 'global',
       key: newMem.key.trim(),
       kind: newMem.kind,
@@ -210,7 +210,7 @@ async function delMem(m: MemoryItem): Promise<void> {
   })
   if (!ok) return
   try {
-    await api.post('/api/memory/delete', { id: m.id })
+    await api.post('/api/research-assistant/memory/delete', { id: m.id })
     toast('已删除')
     await loadMem()
   } catch (e) {
@@ -223,7 +223,7 @@ async function harvest(): Promise<void> {
   if (!rid) return
   harvestBusy.value = true
   try {
-    const res = await api.post<{ written: number }>('/api/memory/harvest', { run_id: rid })
+    const res = await api.post<{ written: number }>('/api/research-assistant/memory/harvest', { run_id: rid })
     toast(`已写入 ${res.written} 条记忆`)
     harvestId.value = ''
     await loadMem()
@@ -253,7 +253,7 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
-  api.get<{ active: boolean }>('/api/llm/config')
+  api.get<{ active: boolean }>('/api/access/llm/config')
     .then((c) => { llmActive.value = !!c.active })
     .catch(() => { /* 旧服务没有该接口时保持规则引擎标识 */ })
 })

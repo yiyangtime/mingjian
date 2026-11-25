@@ -155,6 +155,7 @@ CREATE TABLE IF NOT EXISTS `companies` (
   `reg_status` VARCHAR(255),
   `establish_date` VARCHAR(255),
   `location` TEXT,
+  `website` VARCHAR(255),
   `industry` VARCHAR(255),
   `business` LONGTEXT,
   `source` VARCHAR(255),

@@ -153,7 +153,7 @@ def _worker(job: dict, cfg, resume: bool = False) -> None:
         job["error"] = f"{type(e).__name__}: {e}"
         _job_push(job, {"type": "log", "level": "error", "msg": job["error"],
                         "ts": time.strftime("%H:%M:%S")})
-        LOG.exception("公司情报任务失败 run=%s company=%s", job.get("id"), job.get("company"))
+        LOG.exception("企业洞察任务失败 run=%s company=%s", job.get("id"), job.get("company"))
     finally:
         _CANCEL.discard(job["id"])
 
@@ -166,7 +166,7 @@ def _compare_worker(job: dict, names: list[str], cfg, self_key: str = "") -> Non
         job["result"] = res
         job["status"] = "done"
         store.finish_run(job["id"], "done", res.get("stats") or {})
-        md = OUT_DIR / f"竞品周报_{job['id']}.md"
+        md = OUT_DIR / f"竞品追踪报告_{job['id']}.md"
         try:
             md.write_text(res["report"], encoding="utf-8")
         except Exception:
@@ -185,7 +185,7 @@ def _compare_worker(job: dict, names: list[str], cfg, self_key: str = "") -> Non
         store.finish_run(job["id"], "failed", {}, job["error"])
         _job_push(job, {"type": "log", "level": "error", "msg": job["error"],
                         "ts": time.strftime("%H:%M:%S")})
-        LOG.exception("竞品周报任务失败 run=%s names=%s", job.get("id"),
+        LOG.exception("竞品追踪任务失败 run=%s names=%s", job.get("id"),
                       "、".join(names) if names else "-")
     finally:
         _CANCEL.discard(job["id"])
@@ -232,7 +232,7 @@ def _enqueue_run(company: str, cfg, trigger: str = "") -> str:
 def _enqueue_compare(names: list[str], cfg, self_key: str = "", trigger: str = "") -> str:
     rid = _new_rid("C", tuple(names))
     company = " · ".join(names)
-    # entity_key 留空：竞品周报不是单一主体，不能参与指标/专题的"最近一次运行"选择
+    # entity_key 留空：竞品追踪不是单一主体，不能参与指标/专题的"最近一次运行"选择
     store.create_run(rid, "", company, {"companies": names, "days": cfg.days,
                                         "max_fetch": cfg.max_fetch})
     job = _new_job(rid, company, kind="compare")
@@ -251,7 +251,7 @@ def _start_scheduled(s: dict) -> str:
     if s.get("kind") == "compare":
         names = [str(c).strip() for c in (params.get("companies") or []) if str(c).strip()]
         if len(names) < 2:
-            raise ValueError("竞品周报至少需要两家公司")
+            raise ValueError("竞品追踪至少需要两家公司")
         rid = _enqueue_compare(names, cfg, params.get("self_key") or "",
                                trigger=f"定时任务：{s.get('name')}")
     else:

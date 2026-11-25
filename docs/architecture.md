@@ -75,11 +75,11 @@ mingjian/                    后端包
 web/                         前端工程
 ├── src/app/                 App.vue 与 router.ts
 ├── src/shared/              api / components / composables / lib / styles / types
-├── src/features/            company / policy / competitor / metrics / agent / settings
+├── src/features/            company / policy / competitor / metrics / agent / system / settings
 └── dist/                    构建产物，服务端唯一托管目录
 ```
 
-## 三、一次公司情报运行的数据流
+## 三、一次企业洞察运行的数据流
 
 ```text
 用户输入公司名
@@ -102,7 +102,7 @@ web/                         前端工程
 
 ### 公司搜索链路
 
-监测对象、竞品名单与档案补全共用 `/api/entity/search`，按以下顺序合并并去重：
+监测对象、竞品名单与档案补全共用 `/api/company/entity/search`，按以下顺序合并并去重：
 
 ```text
 输入公司名 / 简称
@@ -121,7 +121,7 @@ web/                         前端工程
 | 表 | 作用 | 关键约束 |
 |---|---|---|
 | `entities` | 实体解析结果（key / 代码 / 全称 / 行业 / 注册地） | `key` 唯一 |
-| `companies` | 工商登记缓存（信用代码 / 法人 / 注册资本 / 经营状态 / 经营范围） | `key` 唯一；接口按次计费，查过就留档 |
+| `companies` | 工商登记缓存（信用代码 / 法人 / 注册资本 / 经营状态 / 经营范围 / 官网） | `key` 唯一；接口按次计费，查过就留档 |
 | `subjects` | 非上市主体自述档案 | `key` 唯一，JSON 全字段 |
 | `runs` | 每次运行的状态与统计 | 状态机 running / done / failed / cancelled |
 | `documents` | 采集到的原文（公告 / 资讯 / 网页） | 证据等级 full / snippet / title |
@@ -146,7 +146,8 @@ SQL。表结构在 `infra/schema.py` 里定义一份，可渲染成三种方言�
 
 工商数据源同样存在 `settings`（键 `registry`）：端点、鉴权、结果路径与字段映射
 都可配，密钥只落库、不回传前端。检索结果写入 `companies` 表并缓存在进程内 300 秒，
-同一关键词不会反复消耗接口额度；未配置时整条链路关闭，不影响原有搜索。
+同一关键词不会反复消耗接口额度；未配置时整条链路关闭，不影响原有搜索。检索结果里的
+官网随 `companies` 一并缓存，旧库启动时自动补列。
 
 离线优化不新增数据库表：生效规则指针、版本归档、评测报告与审计都在
 `data/optimizer/`。每次运行开始时读取一次版本，版本号写入 `runs.params` 与检查点，

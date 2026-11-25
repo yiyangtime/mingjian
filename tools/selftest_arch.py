@@ -184,7 +184,8 @@ VIEW_BUDGET = {
     "competitor/CompetitorView.vue": 1245,
     "metrics/MetricsView.vue": 890,
     "policy/PolicyView.vue": 1265,
-    "settings/SettingsView.vue": 430,
+    "settings/SettingsView.vue": 370,
+    "system/SystemView.vue": 90,
 }
 
 

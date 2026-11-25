@@ -1,4 +1,4 @@
-"""政策公告路由：目录扫描、上传解析、人工确认留痕、工信部/省厅官网取数。"""
+"""政策雷达路由：目录扫描、上传解析、人工确认留痕、工信部/省厅官网取数。"""
 from __future__ import annotations
 
 import base64
@@ -12,12 +12,12 @@ from ...infra.sources import cninfo, eastmoney
 from ...services import govpolicy, policy, subject
 from ..deps import truthy
 
-router = APIRouter(tags=["政策取数"])
+router = APIRouter(tags=["政策雷达"])
 
 POLICY_DIR = ROOT / "materials"
 
 
-@router.get("/api/policy/scan")
+@router.get("/api/policy-radar/scan")
 def policy_scan():
     docs, skipped = policy.scan_dir(POLICY_DIR)
     for i, d in enumerate(docs, 1):
@@ -26,12 +26,12 @@ def policy_scan():
             "dir": POLICY_DIR.name, "files": len(docs)}
 
 
-@router.get("/api/policy/audit")
+@router.get("/api/policy-radar/audit")
 def policy_audit(limit: int = 100):
     return {"audit": store.list_audit("policy", limit)}
 
 
-@router.get("/api/policy/gov/health")
+@router.get("/api/policy-radar/gov/health")
 def gov_health():
     snap = govpolicy.health_snapshot()
     return {
@@ -42,7 +42,7 @@ def gov_health():
     }
 
 
-@router.get("/api/policy/gov")
+@router.get("/api/policy-radar/gov")
 def gov_collect(company: str = "", refresh: str = "0", province: str = "",
                 central: int = 4, local: int = 4, keyword: list[str] | None = None):
     company = company.strip()
@@ -95,7 +95,7 @@ def gov_collect(company: str = "", refresh: str = "0", province: str = "",
     return res
 
 
-@router.post("/api/policy/parse")
+@router.post("/api/policy-radar/parse")
 def parse_policy(data: dict | None = Body(default=None)):
     data = data or {}
     files = data.get("files") or []
@@ -124,7 +124,7 @@ def parse_policy(data: dict | None = Body(default=None)):
             "skipped": skipped, "files": len(docs)}
 
 
-@router.post("/api/policy/confirm")
+@router.post("/api/policy-radar/confirm")
 def confirm_policy(data: dict | None = Body(default=None)):
     data = data or {}
     action = data.get("action") or "confirm"

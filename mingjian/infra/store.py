@@ -145,7 +145,7 @@ CREATE TABLE IF NOT EXISTS checkpoints (
 CREATE TABLE IF NOT EXISTS schedules (
   id TEXT PRIMARY KEY,
   name TEXT,
-  kind TEXT,                     -- run（公司情报）/ compare（竞品周报）
+  kind TEXT,                     -- run（企业洞察）/ compare（竞品追踪）
   params TEXT,                   -- JSON：公司、回溯天数、抓取条数
   spec TEXT,                     -- JSON：{freq: daily|weekly, weekday: 1-7, time: HH:MM}
   enabled INTEGER DEFAULT 1,
@@ -183,6 +183,7 @@ CREATE TABLE IF NOT EXISTS companies (
   reg_status TEXT,               -- 存续 / 在业 / 注销 / 吊销
   establish_date TEXT,
   location TEXT,                 -- 注册地址
+  website TEXT,                  -- 公司官网
   industry TEXT,
   business TEXT,                 -- 经营范围
   source TEXT,                   -- 工商接口标识
@@ -232,6 +233,25 @@ def ddl_statements() -> list[str]:
     return schemadef.ddl(dialect())
 
 
+# 旧库补列：CREATE TABLE IF NOT EXISTS 不会改动已有表，升级后在这里按需加列
+_PATCH_COLUMNS = {"companies": (("website", "TEXT"),)}
+
+
+def _patch_columns(c: dbmod.Conn) -> None:
+    for table, cols in _PATCH_COLUMNS.items():
+        if c.dialect == dbmod.SQLITE:
+            rows = c.execute(f"PRAGMA table_info({table})").fetchall()
+            have = {str(r["name"]) for r in rows}
+        else:
+            rows = c.execute(
+                "SELECT column_name AS name FROM information_schema.columns "
+                "WHERE table_name=?", (table,)).fetchall()
+            have = {str(r["name"]) for r in rows}
+        for name, typ in cols:
+            if name not in have:
+                c.execute(f"ALTER TABLE {table} ADD COLUMN {name} {typ}")
+
+
 def conn() -> dbmod.Conn:
     c = getattr(_local, "conn", None)
     if c is None:
@@ -259,7 +279,7 @@ def init(force: bool = False) -> None:
     """建表（幂等）。同一目标只执行一次 DDL，避免每次读写都往返一轮。
 
     `force=True` 供命令行显式重建；换库或换 test 临时路径时缓存键不匹配，
-    会自动重新建表。
+    会自动重新建表。旧库缺失的新列在这里补齐。
     """
     global _ready
     key = (DB_URL, str(DB_PATH))
@@ -268,6 +288,7 @@ def init(force: bool = False) -> None:
     with tx() as c:
         for stmt in ddl_statements():
             c.execute(stmt)
+        _patch_columns(c)
     _ready = key
 
 
@@ -400,7 +421,7 @@ def table_counts() -> dict:
 # ---------------- companies ----------------
 
 _COMPANY_COLS = ("key", "name", "credit_code", "legal_person", "reg_capital",
-                 "reg_status", "establish_date", "location", "industry",
+                 "reg_status", "establish_date", "location", "website", "industry",
                  "business", "source", "raw", "fetched_at")
 
 

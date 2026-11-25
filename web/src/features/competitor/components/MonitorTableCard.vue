@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 监测名单：只负责展示与派发，增删改与档案补全的副作用留在视图。 */
 import type { Monitor } from '../types'
-import { monitorType } from '../monitor'
+import { monitorType, siteLabel, siteUrl } from '../monitor'
 
 defineProps<{
   monitors: Monitor[]
@@ -23,6 +23,7 @@ const emit = defineEmits<{
         <span>公司名</span>
         <span>公司类型</span>
         <span>所处产业</span>
+        <span>官网</span>
         <span class="mc-act">操作</span>
       </div>
       <div v-for="m in monitors" :key="m.name" class="mon-tr">
@@ -35,6 +36,13 @@ const emit = defineEmits<{
         </span>
         <span class="mc-ind" :title="m.business || m.industry || ''">
           {{ m.industry || (enriching ? '补全中…' : '未标注') }}
+        </span>
+        <span class="mc-site">
+          <a
+            v-if="siteUrl(m.website)" :href="siteUrl(m.website)" target="_blank"
+            rel="noopener noreferrer" :title="m.website"
+          >{{ siteLabel(m.website) }}</a>
+          <span v-else class="none" title="编辑监测对象可补填官网">—</span>
         </span>
         <span class="mc-act">
           <button type="button" class="btn btn-ghost btn-xs" @click="emit('edit', m)">编辑</button>
@@ -62,8 +70,8 @@ const emit = defineEmits<{
 .mon-table { flex: 1; min-width: 0; overflow-x: auto; }
 .mon-tr {
   display: grid;
-  grid-template-columns: minmax(160px, 1.5fr) 132px minmax(130px, 1fr) 96px;
-  gap: 12px; align-items: center; min-width: 560px;
+  grid-template-columns: minmax(160px, 1.5fr) 132px minmax(120px, 1fr) minmax(120px, 1fr) 96px;
+  gap: 12px; align-items: center; min-width: 680px;
   padding: 10px 12px; border-bottom: 1px solid #F1F3F6; font-size: 13px;
 }
 .mon-tr:last-child { border-bottom: none; }
@@ -79,6 +87,13 @@ const emit = defineEmits<{
 .mtag.listed { color: #1D4ED8; background: #EFF3FF; }
 .mtag.unlisted { color: #5B6472; background: #F2F4F7; }
 .mc-ind { color: var(--sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-site { min-width: 0; display: flex; align-items: center; }
+.mc-site a {
+  font-size: 12.5px; color: var(--accent); text-decoration: none;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mc-site a:hover { text-decoration: underline; }
+.mc-site .none { color: #B0B7C3; }
 .mc-act { display: flex; justify-content: flex-end; align-items: center; gap: 7px; }
 .mon-x {
   flex: none; width: 22px; height: 22px; border: none; border-radius: 6px;

@@ -7,10 +7,10 @@
 
 | 方式 | 适用格式 | 怎么做 |
 |---|---|---|
-| **A. 按产业自动获取**（推荐） | 官网在线文件 | 打开 `/policy` → 输入公司名 → 点「获取政策与补贴公告」。按主体行业与注册地，在已接入的政策站点检索并抓取，抓回即抽字段并给原文链接 |
-| **B. 目录扫描** | `.pdf` `.docx` `.txt` `.md` `.html` | 文件放 `materials/` → 在 `/policy` 点「重新扫描 materials/」 |
-| **C. 页面内拖入** | 同上 | 在 `/policy` 把文件拖进「材料来源」区域，上传后服务端即时解析 |
-| **D. 粘贴全文** | 任意（含扫描件的识别结果） | `/policy` 点「粘贴全文解析」，粘贴正文后解析 |
+| **A. 按产业自动获取**（推荐） | 官网在线文件 | 打开 `/policy-radar` → 输入公司名 → 点「获取政策与补贴公告」。按主体行业与注册地，在已接入的政策站点检索并抓取，抓回即抽字段并给原文链接 |
+| **B. 目录扫描** | `.pdf` `.docx` `.txt` `.md` `.html` | 文件放 `materials/` → 在 `/policy-radar` 点「重新扫描 materials/」 |
+| **C. 页面内拖入** | 同上 | 在 `/policy-radar` 把文件拖进「材料来源」区域，上传后服务端即时解析 |
+| **D. 粘贴全文** | 任意（含扫描件的识别结果） | `/policy-radar` 点「粘贴全文解析」，粘贴正文后解析 |
 | **E. 命令行** | 同上 | `python -m mingjian policy --dir materials --csv output/policy.csv`，或 `python -m mingjian gov 某某企业` |
 
 B—E 走同一个解析模块 `mingjian/services/policy.py`；A 先取回官网原文，再交给同一模块解析。
@@ -42,7 +42,7 @@ python -m mingjian policy --dir materials --csv output/policy.csv
 python -m mingjian policy --dir materials --limit 10
 ```
 
-网页入口不需要命令：`/policy` 打开时自动扫描 `materials/`，顶部显示已扫描与跳过的份数。
+网页入口不需要命令：`/policy-radar` 打开时自动扫描 `materials/`，顶部显示已扫描与跳过的份数。
 
 ## 四、几条设计约束（有意为之，不是缺陷）
 
@@ -54,7 +54,7 @@ python -m mingjian policy --dir materials --limit 10
    进异常清单并给补材料建议。
 4. **非公告文本会被判失败。** 会议纪要、合同、内部通知等跑进来会得到
    「未识别到任何关键字段」——这是正确行为，不要为了让它「有结果」而放宽规则。
-5. **人工确认必须留痕。** `/policy` 里改过的每个字段都会写入审计表
+5. **人工确认必须留痕。** `/policy-radar` 里改过的每个字段都会写入审计表
    （谁、何时、改了哪个字段、改前改后），可在「审计记录」里查。
 
 ## 五、能力边界

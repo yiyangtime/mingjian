@@ -147,9 +147,9 @@ async function loadCompany(name?: string, force = false): Promise<void> {
   lastQ.value = null
   try {
     const [d, t] = await Promise.all([
-      api.get<MetricsResp>('/api/metrics', { company: n, refresh: force ? 1 : undefined }),
+      api.get<MetricsResp>('/api/metric-insight/overview', { company: n, refresh: force ? 1 : undefined }),
       // 专题生成失败不应拖垮整页：指标照常展示
-      api.get<Topic>('/api/topic', { company: n, refresh: force ? 1 : undefined }).catch(() => null),
+      api.get<Topic>('/api/metric-insight/topic', { company: n, refresh: force ? 1 : undefined }).catch(() => null),
     ])
     company.value = d.company || n
     entity.value = d.entity || {}
@@ -318,7 +318,7 @@ async function runQuery(): Promise<void> {
   }
   qBusy.value = true
   try {
-    const d = await api.post<{ ok: boolean; rows?: QRow[]; note?: string }>('/api/metrics/query', {
+    const d = await api.post<{ ok: boolean; rows?: QRow[]; note?: string }>('/api/metric-insight/query', {
       company: company.value.trim(),
       metric: m.k,
       periods: Number(qPeriods.value) || 4,

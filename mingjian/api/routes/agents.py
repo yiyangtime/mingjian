@@ -1,4 +1,4 @@
-"""智能体路由：技能注册表执行、跨运行记忆读写与沉淀。"""
+"""研究助理路由：技能注册表执行、跨运行记忆读写与沉淀。"""
 from __future__ import annotations
 
 from fastapi import APIRouter, Body, HTTPException
@@ -6,15 +6,15 @@ from fastapi import APIRouter, Body, HTTPException
 from ...infra import store
 from ...services import memory, skills
 
-router = APIRouter(tags=["智能体"])
+router = APIRouter(tags=["研究助理"])
 
 
-@router.get("/api/skills")
+@router.get("/api/research-assistant/skills")
 def list_skills():
     return {"skills": skills.public(), "kinds": skills.KIND_LABEL}
 
 
-@router.get("/api/memory")
+@router.get("/api/research-assistant/memory")
 def list_memory(q: str = "", scope: str = "", kind: str = "", limit: int = 50):
     q, scope, kind = q.strip(), scope.strip(), kind.strip()
     limit = max(1, min(200, limit))
@@ -30,7 +30,7 @@ def list_memory(q: str = "", scope: str = "", kind: str = "", limit: int = 50):
             "stats": memory.stats(), "kinds": list(memory.KINDS)}
 
 
-@router.post("/api/skills/run")
+@router.post("/api/research-assistant/skills/run")
 def run_skill(data: dict | None = Body(default=None)):
     data = data or {}
     name = (data.get("name") or "").strip()
@@ -47,7 +47,7 @@ def run_skill(data: dict | None = Body(default=None)):
     return res
 
 
-@router.post("/api/memory")
+@router.post("/api/research-assistant/memory")
 def write_memory(data: dict | None = Body(default=None)):
     data = data or {}
     try:
@@ -63,7 +63,7 @@ def write_memory(data: dict | None = Body(default=None)):
     return {"ok": True, "item": item}
 
 
-@router.post("/api/memory/delete")
+@router.post("/api/research-assistant/memory/delete")
 def delete_memory(data: dict | None = Body(default=None)):
     data = data or {}
     mid = (data.get("id") or "").strip()
@@ -75,7 +75,7 @@ def delete_memory(data: dict | None = Body(default=None)):
     return {"ok": True, "stats": memory.stats()}
 
 
-@router.post("/api/memory/harvest")
+@router.post("/api/research-assistant/memory/harvest")
 def harvest_memory(data: dict | None = Body(default=None)):
     data = data or {}
     rid = (data.get("run_id") or "").strip()

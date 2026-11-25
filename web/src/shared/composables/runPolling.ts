@@ -1,5 +1,5 @@
 /**
- * 运行轮询状态机：/api/run/{id}?since= 的公共部分（公司情报与竞品周报共用）。
+ * 运行轮询状态机：/api/company/run/{id}?since= 的公共部分（企业洞察与竞品追踪共用）。
  *
  * 只负责「定时拉取 + 增量事件游标 + 卸载自动停表」，步骤与日志怎么渲染交给调用方钩子；
  * 组件离开时通过 onScopeDispose 停表，避免路由切走后仍有请求在跑。
@@ -44,7 +44,7 @@ export function useRunPolling(intervalMs = 800) {
     timer = window.setInterval(async () => {
       let d: RunPoll
       try {
-        d = await api.get<RunPoll>(`/api/run/${id}`, { since: seq })
+        d = await api.get<RunPoll>(`/api/company/run/${id}`, { since: seq })
       } catch (e) {
         stop()
         hooks.onError?.(e as Error)

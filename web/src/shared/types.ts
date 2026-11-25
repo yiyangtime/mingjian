@@ -26,7 +26,7 @@ export interface Fact {
   url?: string
   published_at?: string
   evidence_level?: string
-  // 竞品周报里的事实带公司前缀编号与轻量字段别名
+  // 竞品追踪报告里的事实带公司前缀编号与轻量字段别名
   ref?: string
   kind?: string
   text?: string
@@ -94,7 +94,7 @@ export interface RunResult {
   stats: RunStats
   errors?: string[]
   restored?: boolean
-  // 竞品周报专有
+  // 竞品追踪报告专有
   companies?: ComparePack[]
   matrix?: MatrixRow[]
   judgments?: Judgment[]

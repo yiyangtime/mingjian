@@ -1510,8 +1510,15 @@ def _registry_basic():
     row = {"name": "某某智能装备有限公司", "creditCode": "91320100MA1XXXX01X",
            "legalPersonName": "张三", "regCapital": "5000万人民币", "regStatus": "存续",
            "estiblishTime": 1577836800000, "regLocation": "某省某市某区",
-           "industry": "专用设备制造业", "businessScope": "智能装备研发、制造"}
+           "industry": "专用设备制造业", "businessScope": "智能装备研发、制造",
+           "website": "www.example.com"}
     payload = {"error_code": 0, "reason": "ok", "result": {"items": [row]}}
+    mapping = {
+        "name": "name", "credit_code": "creditCode", "legal_person": "legalPersonName",
+        "reg_capital": "regCapital", "reg_status": "regStatus",
+        "establish_date": "estiblishTime", "location": "regLocation",
+        "industry": "industry", "business": "businessScope", "website": "website",
+    }
 
     def fake(url, **kw):
         calls.append(url)
@@ -1520,7 +1527,7 @@ def _registry_basic():
     registry.fetch = fake
     try:
         out = registry.save_profile({"preset": "tianyancha", "name": "测试接口",
-                                    "key": "tk-1234"})
+                                    "key": "tk-1234", "map": mapping})
         assert out["enabled"] and out["active_id"], out
         assert out["profiles"][0]["key_hint"] == "…1234", out
         assert "key" not in out["profiles"][0], out          # 密钥不回传页面
@@ -1532,6 +1539,7 @@ def _registry_basic():
         assert items and items[0]["credit_code"] == "91320100MA1XXXX01X", items
         assert items[0]["establish_date"] == "2020-01-01", items[0]
         assert items[0]["legal_person"] == "张三", items[0]
+        assert items[0]["website"] == "www.example.com", items[0]
         assert "pageSize=5" in calls[0] and "word=" in calls[0], calls[0]
 
         # 已缓存：同一关键词不再消耗接口额度
@@ -1539,6 +1547,7 @@ def _registry_basic():
         assert registry.search("某某", limit=5), "缓存应命中"
         assert len(calls) == n, calls
         assert store.get_company("某某智能装备有限公司")["industry"] == "专用设备制造业"
+        assert store.get_company("某某智能装备有限公司")["website"] == "www.example.com"
 
         registry._cache.clear()
         payload.update({"error_code": 300002, "reason": "账号失效"})
@@ -1640,6 +1649,7 @@ def _entity_profile_registry():
         "industry": "通用设备制造业", "location": "某省某市",
         "reg_status": "存续", "reg_capital": "800万",
         "establish_date": "2019-06-01", "business": "精密零部件制造",
+        "website": "www.example.com",
     }
     cninfo.resolve = lambda name: {}
     subject.get = lambda key: {}
@@ -1649,11 +1659,46 @@ def _entity_profile_registry():
         assert out["listed"] is False and out["credit_code"].endswith("002X"), out
         assert out["industry"] == "通用设备制造业", out
         assert out["region"] == "某省某市" and out["reg_status"] == "存续", out
+        assert out["website"] == "www.example.com", out
         assert "工商登记" in out["source"], out
     finally:
         registry.resolve, cninfo.resolve, subject.get = old_resolve, old_listed, old_sub
         entities.profile_cache.clear()
         entities.profile_cache.update(old_cache)
+
+
+@case("数据库：旧 companies 表自动补官网列")
+def _company_patch_columns():
+    import shutil
+    import sqlite3
+    import tempfile
+
+    tmpdir = pathlib.Path(tempfile.mkdtemp(prefix="mingjian_mig_"))
+    dbp = tmpdir / "old.db"
+    raw = sqlite3.connect(dbp)
+    raw.execute("""CREATE TABLE companies (
+        key TEXT PRIMARY KEY, name TEXT, credit_code TEXT, legal_person TEXT,
+        reg_capital TEXT, reg_status TEXT, establish_date TEXT, location TEXT,
+        industry TEXT, business TEXT, source TEXT, raw TEXT, fetched_at TEXT)""")
+    raw.commit()
+    raw.close()
+    old_path, old_url = store.DB_PATH, store.DB_URL
+    old_conn, old_ready = getattr(store._local, "conn", None), store._ready
+    store.DB_PATH, store.DB_URL, store._local.conn = dbp, "", None
+    store._ready = None
+    try:
+        store.init()
+        cols = [r["name"] for r in
+                store.conn().execute("PRAGMA table_info(companies)").fetchall()]
+        assert "website" in cols, cols
+        store.upsert_company({"key": "某公司", "name": "某公司", "website": "example.com"})
+        assert store.get_company("某公司")["website"] == "example.com"
+    finally:
+        if getattr(store._local, "conn", None) is not None:
+            store._local.conn.close()
+        store._local.conn, store._ready = old_conn, old_ready
+        store.DB_PATH, store.DB_URL = old_path, old_url
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def main() -> int:

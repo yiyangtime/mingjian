@@ -162,6 +162,7 @@ CREATE TABLE IF NOT EXISTS companies (
   reg_status TEXT,
   establish_date TEXT,
   location TEXT,
+  website TEXT,
   industry TEXT,
   business TEXT,
   source TEXT,

@@ -12,7 +12,7 @@ const emit = defineEmits<{ (e: 'refresh'): void }>()
 </script>
 
 <template>
-  <section class="card section-gap">
+  <section class="card">
     <div class="card-h">
       <h3>系统与服务状态</h3>
       <span class="st" :class="{ on: !error }">{{ error ? '服务未连接' : '服务正常' }}</span>
@@ -46,7 +46,6 @@ const emit = defineEmits<{ (e: 'refresh'): void }>()
 .card-h h3 { margin: 0; font-size: 14.5px; font-weight: 650; }
 .st { margin-left: auto; font-size: 11px; padding: 2px 9px; border-radius: 11px; background: #F1F3F6; color: var(--sub); }
 .st.on { background: var(--ok-soft); color: var(--ok); }
-.section-gap { margin-top: 18px; }
 
 .sysgrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px 22px; padding: 18px 20px 12px; }
 @media (max-width: 1000px) { .sysgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

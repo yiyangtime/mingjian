@@ -1,4 +1,4 @@
-"""公司情报运行路由：发起、轮询、取消、续跑、历史、报告与事实表。"""
+"""企业洞察运行路由：发起、轮询、取消、续跑、历史、报告与事实表。"""
 from __future__ import annotations
 
 import json
@@ -10,10 +10,10 @@ from fastapi.responses import Response
 from ...infra import store
 from ...runtime import jobs, pipeline
 
-router = APIRouter(tags=["情报运行"])
+router = APIRouter(tags=["企业洞察"])
 
 
-@router.get("/api/run/{rid}")
+@router.get("/api/company/run/{rid}")
 def get_run(rid: str, since: int = 0):
     since = max(0, since)
     with jobs._LOCK:
@@ -33,7 +33,7 @@ def get_run(rid: str, since: int = 0):
             error = run.get("error")
             kind = "compare" if rid.startswith("C") else "run"
             steps = jobs._steps_of(rid)
-            # 竞品周报的矩阵只在内存里，重启后不伪造 result，报告文件仍可下载
+            # 竞品追踪的矩阵只在内存里，重启后不伪造 result，报告文件仍可下载
             result = jobs._result_from_db(rid) if status == "done" and kind == "run" else None
         else:
             # 极端情况下只剩事件（早期没有 runs 行的历史）：靠事件判断是否跑完
@@ -57,7 +57,7 @@ def get_run(rid: str, since: int = 0):
     }
 
 
-@router.get("/api/runs")
+@router.get("/api/company/runs")
 def list_runs(limit: int = 20, offset: int = 0, q: str = "", status: str = ""):
     limit = max(1, min(100, limit))
     offset = max(0, offset)
@@ -74,7 +74,7 @@ def list_runs(limit: int = 20, offset: int = 0, q: str = "", status: str = ""):
             "limit": limit, "offset": offset}
 
 
-@router.get("/api/report/{rid}")
+@router.get("/api/company/report/{rid}")
 def get_report(rid: str):
     rid = rid.replace(".md", "")
     md = jobs._report_path(rid)
@@ -91,7 +91,7 @@ def get_report(rid: str):
     raise HTTPException(404, "报告不存在")
 
 
-@router.get("/api/facts/{rid}")
+@router.get("/api/company/facts/{rid}")
 def get_facts(rid: str):
     rid = rid.replace(".csv", "")
     facts = store.facts_of_run(rid)
@@ -109,7 +109,7 @@ def get_facts(rid: str):
     )
 
 
-@router.post("/api/run")
+@router.post("/api/company/run")
 def start_run(data: dict | None = Body(default=None)):
     data = data or {}
     company = str(data.get("company") or "").strip()
@@ -119,7 +119,7 @@ def start_run(data: dict | None = Body(default=None)):
     return {"run_id": rid, "status": "queued"}
 
 
-@router.post("/api/run/{rid}/cancel")
+@router.post("/api/company/run/{rid}/cancel")
 def cancel_run(rid: str):
     with jobs._LOCK:
         job = jobs._JOBS.get(rid)
@@ -132,7 +132,7 @@ def cancel_run(rid: str):
             "note": "已发出取消信号，当前步骤结束后停止"}
 
 
-@router.post("/api/run/{rid}/resume")
+@router.post("/api/company/run/{rid}/resume")
 def resume_run(rid: str):
     with jobs._LOCK:
         job = jobs._JOBS.get(rid)
@@ -140,7 +140,7 @@ def resume_run(rid: str):
     if busy:
         raise HTTPException(409, "该运行仍在执行中")
     if rid.startswith("C"):
-        raise HTTPException(400, "竞品周报暂不支持续跑，请重新发起")
+        raise HTTPException(400, "竞品追踪暂不支持续跑，请重新发起")
     run = store.get_run(rid)
     company = (run or {}).get("company") or (job or {}).get("company") or ""
     status = (run or {}).get("status") or (job or {}).get("status") or ""

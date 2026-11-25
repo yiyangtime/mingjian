@@ -5,12 +5,13 @@ import { closeHelp, helpState } from '../composables/help'
 defineProps<{ version?: string }>()
 
 const pages = [
-  { to: '/', name: '公司情报', what: '这家公司最近发生了什么', how: '巨潮公告 + 东财资讯' },
-  { to: '/policy', name: '政策公告', what: '所在产业有哪些政策与补贴', how: '工信部 / 省工信厅官网，也可上传文件' },
-  { to: '/competitor', name: '竞品周报', what: '同一件事上谁在动、动得多快', how: '逐家跑完整链路后按维度对比' },
-  { to: '/metrics', name: '指标联动', what: '当期最值得追的产业问题是什么', how: '定期报告指标 + 主营构成' },
-  { to: '/agent', name: '智能体', what: '能执行哪些动作、记住了什么', how: '技能白名单 + 跨运行记忆' },
-  { to: '/settings', name: '模型配置', what: '接哪家模型、系统运行得怎样', how: 'OpenAI 兼容服务商，保存即生效' },
+  { to: '/', name: '企业洞察', what: '这家公司最近发生了什么', how: '巨潮公告 + 东财资讯' },
+  { to: '/policy-radar', name: '政策雷达', what: '所在产业有哪些政策与补贴', how: '工信部 / 省工信厅官网，也可上传文件' },
+  { to: '/competitor-tracking', name: '竞品追踪', what: '同一件事上谁在动、动得多快', how: '逐家跑完整链路后按维度对比' },
+  { to: '/metric-insight', name: '指标透视', what: '当期最值得追的产业问题是什么', how: '定期报告指标 + 主营构成' },
+  { to: '/research-assistant', name: '研究助理', what: '能执行哪些动作、记住了什么', how: '技能白名单 + 跨运行记忆' },
+  { to: '/access-center', name: '接入中心', what: '接哪家模型与工商接口', how: 'OpenAI 兼容服务商 / 企业工商接口，保存即生效' },
+  { to: '/governance', name: '运行治理', what: '服务运行得怎样、谁改了什么', how: '服务状态 + 审计日志' },
 ]
 </script>
 
@@ -19,14 +20,14 @@ const pages = [
     <section class="hero">
       <p class="lead">输入一个公司名，程序自己联网采集、读原文、抽事实、做比对、写报告、留痕。<b>每条结论都能翻回原文。</b></p>
       <ol class="steps">
-        <li><span>1</span><div><b>选主体</b><br>在公司情报页输入公司名称。</div></li>
+        <li><span>1</span><div><b>选主体</b><br>在企业洞察页输入公司名称。</div></li>
         <li><span>2</span><div><b>看执行</b><br>七步实时日志，可取消；失败或取消后能从断点续跑。</div></li>
         <li><span>3</span><div><b>核事实、导报告</b><br>点事实看证据句与原文，确认/存疑都会写审计日志。</div></li>
       </ol>
     </section>
 
     <section>
-      <h4>六个工作台</h4>
+      <h4>七个工作台</h4>
       <div class="pages">
         <RouterLink v-for="p in pages" :key="p.to" :to="p.to" class="page" @click="closeHelp">
           <div class="pn">{{ p.name }}</div>
@@ -61,7 +62,7 @@ const pages = [
       <ul class="rules">
         <li>采集、事实、报告、审计都存在本机 <code>data/mingjian.db</code> 与 <code>output/</code>，不上传第三方平台。</li>
         <li>联网只发生在采集公开信息与调用你配置的模型服务商时。</li>
-        <li>确认、修正、删除会连同操作人署名与时间写入审计日志；署名只存本机浏览器，可在模型配置页修改。</li>
+        <li>确认、修正、删除会连同操作人署名与时间写入审计日志；署名只存本机浏览器，可在接入中心修改。</li>
         <li>模型密钥只回显尾号；不配模型也能用规则引擎完整跑通。</li>
       </ul>
     </section>

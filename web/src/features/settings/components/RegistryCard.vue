@@ -42,7 +42,7 @@ function apply(next: RegistryConfig): void {
 async function load(): Promise<void> {
   loading.value = true
   try {
-    apply(await api.get<RegistryConfig>('/api/registry/config'))
+    apply(await api.get<RegistryConfig>('/api/access/registry/config'))
     err.value = ''
   } catch (e) {
     err.value = (e as Error).message
@@ -141,7 +141,7 @@ async function save(): Promise<void> {
   }
   busy.value = 'save'
   try {
-    apply(await api.post<RegistryConfig>('/api/registry/config', payload()))
+    apply(await api.post<RegistryConfig>('/api/access/registry/config', payload()))
     open.value = false
     toast('已保存并启用，搜索时会查询工商登记')
   } catch (e) {
@@ -155,7 +155,7 @@ async function probe(): Promise<void> {
   testing.value = true
   testRes.value = null
   try {
-    testRes.value = await api.post<RegistryTestResp>('/api/registry/test', payload())
+    testRes.value = await api.post<RegistryTestResp>('/api/access/registry/test', payload())
   } catch (e) {
     testRes.value = {
       ok: false, status: 'error', ms: 0, count: 0,
@@ -170,7 +170,7 @@ async function activate(p: RegistryProfile): Promise<void> {
   if (p.active || busy.value) return
   busy.value = 'activate:' + p.id
   try {
-    apply(await api.post<RegistryConfig>('/api/registry/config', {
+    apply(await api.post<RegistryConfig>('/api/access/registry/config', {
       action: 'activate', id: p.id, name: p.name, actor: actorName(),
     }))
     toast(`已启用：${p.name}`)
@@ -191,7 +191,7 @@ async function remove(p: RegistryProfile): Promise<void> {
   if (!ok) return
   busy.value = 'delete:' + p.id
   try {
-    apply(await api.post<RegistryConfig>('/api/registry/config', {
+    apply(await api.post<RegistryConfig>('/api/access/registry/config', {
       action: 'delete', id: p.id, name: p.name, actor: actorName(),
     }))
     toast('已删除：' + p.name)
@@ -212,7 +212,7 @@ async function stop(): Promise<void> {
   if (!ok) return
   busy.value = 'clear'
   try {
-    apply(await api.post<RegistryConfig>('/api/registry/config', {
+    apply(await api.post<RegistryConfig>('/api/access/registry/config', {
       action: 'clear', actor: actorName(),
     }))
     toast('已停用工商数据源')

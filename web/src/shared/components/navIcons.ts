@@ -1,18 +1,18 @@
-export type NavIconName = 'company' | 'policy' | 'competitor' | 'metrics' | 'agent' | 'settings'
+export type NavIconName = 'company' | 'policy' | 'competitor' | 'metrics' | 'agent' | 'monitor' | 'settings'
 
 /**
  * 导航图标：24×24 线性描边，颜色继承当前文字色。
  * 只存路径，视图组件统一控制线宽与端点，避免每个图标各写一套 SVG 属性。
  */
 export const NAV_ICON_PATHS: Record<NavIconName, string[]> = {
-  // 公司情报：办公楼
+  // 企业洞察：办公楼
   company: [
     'M4 20h16',
     'M6 20V8.5L12 5l6 3.5V20',
     'M9.5 20v-4.5h5V20',
     'M9 10h.01M12 10h.01M15 10h.01M9 13h.01M12 13h.01M15 13h.01',
   ],
-  // 政策公告：文件与印章
+  // 政策雷达：文件与印章
   policy: [
     'M6 3.5h8l4 4v13H6z',
     'M14 3.5V8h4',
@@ -20,7 +20,7 @@ export const NAV_ICON_PATHS: Record<NavIconName, string[]> = {
     'M15.5 16.5a2 2 0 1 0 0 4 2 2 0 0 0 0-4',
     'M15.5 18.5h.01',
   ],
-  // 竞品周报：雷达扫描
+  // 竞品追踪：雷达扫描
   competitor: [
     'M12 3.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17',
     'M12 7.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9',
@@ -28,18 +28,24 @@ export const NAV_ICON_PATHS: Record<NavIconName, string[]> = {
     'M16.5 8.5h.01',
     'M12 12h.01',
   ],
-  // 指标联动：坐标轴与趋势线
+  // 指标透视：坐标轴与趋势线
   metrics: [
     'M4 4v16h16',
     'M7 15l4-4 3 2.5 5-6',
     'M7 15h.01M19 7.5h.01',
   ],
-  // 智能体：主星与辅星
+  // 研究助理：主星与辅星
   agent: [
     'M12 3.5l1.8 5.2 5.2 1.8-5.2 1.8L12 17.5l-1.8-5.2L5 10.5l5.2-1.8z',
     'M18.5 3.5l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z',
   ],
-  // 模型配置：三组滑杆
+  // 运行治理：屏幕与脉搏
+  monitor: [
+    'M3.5 5.5h17v11h-17z',
+    'M9 20h6M12 16.5V20',
+    'M6.5 11h2.4l1.7-3.2 2.3 5.9 1.7-2.7h2.9',
+  ],
+  // 接入中心：三组滑杆
   settings: [
     'M4 7h4.4M11.6 7H20',
     'M4 12h8.4M15.6 12H20',

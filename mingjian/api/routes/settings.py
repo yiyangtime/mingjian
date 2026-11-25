@@ -1,19 +1,19 @@
-"""配置路由：模型接入与工商数据源的保存、启用、删除与连接测试。"""
+"""接入中心路由：模型接入与工商数据源的保存、启用、删除与连接测试。"""
 from __future__ import annotations
 
 from fastapi import APIRouter, Body, HTTPException
 
 from ...infra import llmcfg, registry, store
 
-router = APIRouter(tags=["配置设置"])
+router = APIRouter(tags=["接入中心"])
 
 
-@router.get("/api/llm/config")
+@router.get("/api/access/llm/config")
 def get_llm_config():
     return llmcfg.public()
 
 
-@router.post("/api/llm/config")
+@router.post("/api/access/llm/config")
 def save_llm_config(data: dict | None = Body(default=None)):
     data = data or {}
     actor = str(data.get("actor") or "").strip() or "业务用户"
@@ -47,7 +47,7 @@ def save_llm_config(data: dict | None = Body(default=None)):
     return {"ok": True, **out}
 
 
-@router.post("/api/llm/test")
+@router.post("/api/access/llm/test")
 def test_llm(data: dict | None = Body(default=None)):
     data = data or {}
     try:
@@ -58,12 +58,12 @@ def test_llm(data: dict | None = Body(default=None)):
         raise HTTPException(400, str(e))
 
 
-@router.get("/api/registry/config")
+@router.get("/api/access/registry/config")
 def get_registry_config():
     return registry.public()
 
 
-@router.post("/api/registry/config")
+@router.post("/api/access/registry/config")
 def save_registry_config(data: dict | None = Body(default=None)):
     """工商数据源配置。密钥只落库，前端只拿得到尾号。"""
     data = data or {}
@@ -95,7 +95,7 @@ def save_registry_config(data: dict | None = Body(default=None)):
     return {"ok": True, **out}
 
 
-@router.post("/api/registry/test")
+@router.post("/api/access/registry/test")
 def test_registry(data: dict | None = Body(default=None)):
     data = data or {}
     try:

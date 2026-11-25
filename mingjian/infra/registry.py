@@ -75,7 +75,8 @@ FIELDS = {
     "name": "企业名称", "credit_code": "统一社会信用代码",
     "legal_person": "法定代表人", "reg_capital": "注册资本",
     "reg_status": "经营状态", "establish_date": "成立日期",
-    "location": "注册地址", "industry": "行业", "business": "经营范围",
+    "location": "注册地址", "website": "官网", "industry": "行业",
+    "business": "经营范围",
 }
 
 _cache: dict[str, tuple[float, list[dict]]] = {}
@@ -433,6 +434,7 @@ def search(keyword: str, limit: int = 8, meta: dict | None = None) -> list[dict]
                 "reg_status": it.get("reg_status", ""),
                 "establish_date": it.get("establish_date", ""),
                 "location": it.get("location", ""),
+                "website": it.get("website", ""),
                 "industry": it.get("industry", ""),
                 "business": it.get("business", ""),
                 "source": it.get("source", ""),

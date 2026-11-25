@@ -19,7 +19,7 @@ import MonitorTableCard from './components/MonitorTableCard.vue'
 import CompareMatrix from './components/CompareMatrix.vue'
 import RunTimeline from './components/RunTimeline.vue'
 
-// 我方基线的 11 个字段与 /api/subject 一一对应，备注独占两列
+// 我方基线的 11 个字段与 /api/company/subject 一一对应，备注独占两列
 const SELF_FIELDS = [
   { k: 'name', label: '企业名称', ph: '如 苏州某某精密传动有限公司' },
   { k: 'region', label: '所在地', ph: '苏州' },
@@ -38,7 +38,7 @@ const route = useRoute()
 // 首次进入不预置示例名单：名单要么来自本地存档，要么由用户显式添加
 const monitors = ref<Monitor[]>([])
 const maxMonitors = ref(FALLBACK_MAX_MONITORS)
-// 兜底值；没存过偏好时以服务端 /api/system 的 limits.days 为准
+// 兜底值；没存过偏好时以服务端 /api/governance/system 的 limits.days 为准
 const days = ref(30)
 const stage = ref<Stage>(1)
 const polling = useRunPolling(900)
@@ -95,6 +95,9 @@ function loadMonitors(): void {
         industry: x.industry ? String(x.industry) : undefined,
         business: x.business ? String(x.business) : undefined,
         full_name: x.full_name ? String(x.full_name) : undefined,
+        credit_code: x.credit_code ? String(x.credit_code) : undefined,
+        website: x.website ? String(x.website) : undefined,
+        site_tried: !!x.site_tried,
         enriched: !!x.enriched,
       }))
     if (list.length) {
@@ -129,7 +132,7 @@ function addMonitor(m: Monitor): boolean {
   monitors.value.push({
     name, code: m.code, market: m.market, type_label: m.type_label,
     industry: m.industry, business: m.business, full_name: m.full_name,
-    enriched: m.enriched,
+    website: m.website, enriched: m.enriched,
   })
   saveMonitors()
   return true
@@ -151,7 +154,7 @@ function addPeer(name: string, code?: string, market?: string): void {
 const enriching = ref(false)
 
 async function fetchProfile(m: Monitor): Promise<Monitor> {
-  const d = await api.get<ProfileResp>('/api/entity/profile', {
+  const d = await api.get<ProfileResp>('/api/company/entity/profile', {
     name: m.name,
     code: m.code || undefined,
     market: m.market || undefined,
@@ -164,6 +167,8 @@ async function fetchProfile(m: Monitor): Promise<Monitor> {
     industry: d.industry || m.industry,
     business: d.main_business || m.business,
     full_name: d.full_name || m.full_name,
+    website: d.website || m.website,
+    site_tried: true,
     enriched: true,
   }
 }
@@ -173,22 +178,28 @@ async function enrichMonitor(m: Monitor): Promise<Monitor> {
   try {
     return await fetchProfile(m)
   } catch {
-    return { ...m, enriched: true }
+    return { ...m, site_tried: true, enriched: true }
   }
 }
 
 async function enrichMonitors(): Promise<void> {
+  // 旧存档的公司已经有档案但没官网：带股票代码的再补拉一次，只补官网
   const targets = monitors.value
-    .map((m, i) => ({ i, name: m.name, m }))
-    .filter((x) => !x.m.enriched)
+    .map((m, i) => ({ i, name: m.name, m,
+      siteOnly: !!m.enriched && !!m.code && !m.website && !m.site_tried }))
+    .filter((x) => !x.m.enriched || x.siteOnly)
   if (!targets.length) return
   enriching.value = true
   try {
     const done = await Promise.all(targets.map(async (t) => ({ ...t, next: await enrichMonitor(t.m) })))
     for (const d of done) {
       const cur = monitors.value[d.i]
-      if (!cur || cur.name !== d.name || cur.enriched) continue
-      monitors.value[d.i] = { ...d.next, name: cur.name }
+      if (!cur || cur.name !== d.name) continue
+      if (d.siteOnly) {
+        monitors.value[d.i] = { ...cur, website: cur.website || d.next.website, site_tried: true }
+      } else if (!cur.enriched) {
+        monitors.value[d.i] = { ...d.next, name: cur.name }
+      }
     }
     saveMonitors()
   } finally {
@@ -202,7 +213,7 @@ const monEditBusy = ref(false)
 const monEditKey = ref('')
 const monForm = reactive({
   name: '', type_label: '非上市企业', code: '', market: '',
-  industry: '', business: '', full_name: '',
+  industry: '', business: '', full_name: '', website: '',
 })
 
 watch(() => monForm.code, (v) => {
@@ -221,6 +232,7 @@ function openMonitorEdit(m: Monitor): void {
   monForm.industry = m.industry || ''
   monForm.business = m.business || ''
   monForm.full_name = m.full_name || ''
+  monForm.website = m.website || ''
   monEditOpen.value = true
 }
 
@@ -238,6 +250,7 @@ async function refillMonitor(): Promise<void> {
     monForm.industry = monForm.industry.trim() || d.industry || ''
     monForm.business = monForm.business.trim() || d.business || ''
     monForm.full_name = monForm.full_name.trim() || d.full_name || ''
+    monForm.website = monForm.website.trim() || d.website || ''
     toast(monForm.industry ? `已补全所处产业：${monForm.industry}` : '公开档案没有返回产业，请手动填写')
   } catch (e) {
     toast('补全失败：' + (e as Error).message)
@@ -261,6 +274,7 @@ function saveMonitorEdit(): void {
     industry: monForm.industry.trim() || undefined,
     business: monForm.business.trim() || undefined,
     full_name: monForm.full_name.trim() || undefined,
+    website: monForm.website.trim() || undefined,
     enriched: true,
   }
   saveMonitors()
@@ -318,7 +332,7 @@ function openPicker(): void {
 
 async function loadSuggest(): Promise<void> {
   try {
-    const d = await api.get<{ runs: { company?: string; kind?: string }[] }>('/api/runs', { limit: 30 })
+    const d = await api.get<{ runs: { company?: string; kind?: string }[] }>('/api/company/runs', { limit: 30 })
     const seen = new Set<string>()
     const out: string[] = []
     for (const r of d.runs || []) {
@@ -341,7 +355,7 @@ async function searchEntity(kw: string): Promise<void> {
   pkBusy.value = true
   pkErr.value = ''
   try {
-    const d = await api.get<{ items: SearchItem[] }>('/api/entity/search', { q: kw, limit: 8 })
+    const d = await api.get<{ items: SearchItem[] }>('/api/company/entity/search', { q: kw, limit: 8 })
     if (seq !== pkSeq) return
     pkItems.value = d.items || []
   } catch (e) {
@@ -382,7 +396,8 @@ function togglePick(it: Monitor | SearchItem): void {
     return
   }
   pkPicked.value.push({ name, code: it.code || undefined, market: it.market || undefined,
-                        credit_code: it.credit_code || undefined })
+                        credit_code: it.credit_code || undefined,
+                        website: it.website || undefined })
 }
 
 function unpick(name: string): void {
@@ -413,7 +428,7 @@ async function confirmPicks(): Promise<void> {
     }
     saveMonitors()
     pkOpen.value = false
-    if (added) toast(`已加入 ${added} 家，确认名单后点「生成周报」`)
+    if (added) toast(`已加入 ${added} 家，确认名单后点「生成追踪报告」`)
   } finally {
     pkSaving.value = false
   }
@@ -429,7 +444,7 @@ async function runDiscover(): Promise<void> {
   dscBusy.value = true
   dsc.value = null
   try {
-    dsc.value = await api.post<DiscoverResp>('/api/discover', {
+    dsc.value = await api.post<DiscoverResp>('/api/company/discover', {
       products: terms,
       region: dscRegion.value.trim(),
       exclude: [selfForm.name.trim(), readRaw('mj_self_name')],
@@ -455,7 +470,7 @@ async function loadSelf(): Promise<void> {
   const name = readRaw('mj_self_name')
   if (!name) return
   try {
-    const d = await api.get<SubjectResp>('/api/subject', { key: name })
+    const d = await api.get<SubjectResp>('/api/company/subject', { key: name })
     if (d.found && d.subject) {
       for (const f of SELF_FIELDS) {
         if (d.subject[f.k]) selfForm[f.k] = d.subject[f.k]
@@ -486,11 +501,11 @@ async function saveSelf(): Promise<void> {
   }
   selfBusy.value = true
   try {
-    const d = await api.post<SubjectResp>('/api/subject', body)
+    const d = await api.post<SubjectResp>('/api/company/subject', body)
     selfKey.value = d.subject?.key || body.name
     writeRaw('mj_self_name', body.name)
     showSelfCov(d.coverage)
-    toast('已保存：这次生成周报会带上「我方」列')
+    toast('已保存：这次生成追踪报告会带上「我方」列')
   } catch (e) {
     toast('保存失败：' + (e as Error).message)
   } finally {
@@ -526,10 +541,10 @@ function startPoll(id: string, since = 0): void {
       if (d.result) {
         result.value = d.result
         stage.value = 3
-        toast('周报已生成')
+        toast('追踪报告已生成')
         return
       }
-      // 重启后竞品周报的矩阵不在内存里：退到报告文件，不无限轮询
+      // 重启后竞品追踪的矩阵不在内存里：退到报告文件，不无限轮询
       toast('结果明细不在内存中，已打开报告文件')
       openLink(id)
     },
@@ -544,7 +559,7 @@ function startPoll(id: string, since = 0): void {
       cancelable.value = false
       running.value = false
       resumable.value = d.resumable
-      toast(d.resumable ? '已取消，可从断点续跑' : '已取消；周报由多家子运行组成，请重新发起')
+      toast(d.resumable ? '已取消，可从断点续跑' : '已取消；追踪报告由多家子运行组成，请重新发起')
     },
     onError: (err) => {
       cancelable.value = false
@@ -577,7 +592,7 @@ async function start(): Promise<void> {
   runSub.value = names.join(' · ')
   addLog(`任务已提交：${names.length} 家，回溯 ${days.value} 天`)
   try {
-    const r = await api.post<{ run_id: string }>('/api/compare', {
+    const r = await api.post<{ run_id: string }>('/api/competitor-tracking/compare', {
       companies: names,
       days: Number(days.value) || undefined,
       self_key: selfKey.value || readRaw('mj_self_name'),
@@ -594,7 +609,7 @@ async function cancel(): Promise<void> {
   if (!runId.value) return
   cancelBusy.value = true
   try {
-    await api.post(`/api/run/${runId.value}/cancel`)
+    await api.post(`/api/company/run/${runId.value}/cancel`)
     toast('已发出取消信号，当前步骤结束后停止')
   } catch (e) {
     toast('取消失败：' + (e as Error).message)
@@ -608,7 +623,7 @@ async function resume(): Promise<void> {
   resumable.value = false
   running.value = true
   try {
-    const d = await api.post<{ from_step?: number }>(`/api/run/${runId.value}/resume`)
+    const d = await api.post<{ from_step?: number }>(`/api/company/run/${runId.value}/resume`)
     toast(d.from_step ? `从第 ${d.from_step} 步续跑` : '没有检查点，从头重跑')
     startPoll(runId.value)
   } catch (e) {
@@ -639,7 +654,7 @@ const statCards = computed(() => {
 
 async function openLink(id: string): Promise<void> {
   try {
-    const d = await api.get<RunPoll>(`/api/run/${id}`)
+    const d = await api.get<RunPoll>(`/api/company/run/${id}`)
     runId.value = id
     if (d.result) {
       result.value = d.result
@@ -648,7 +663,7 @@ async function openLink(id: string): Promise<void> {
     }
     if (d.status === 'done') {
       try {
-        const text = await api.text(`/api/report/${id}.md`)
+        const text = await api.text(`/api/company/report/${id}.md`)
         result.value = {
           run_id: id, company: '', docs: [], facts: [],
           changes: { has_baseline: false, baseline_count: 0, new: [], escalated: [], faded: [] },
@@ -675,7 +690,7 @@ async function openLink(id: string): Promise<void> {
     running.value = false
     resumable.value = d.resumable
     toast((d.status === 'cancelled' ? '该运行已取消' : '该运行失败')
-      + (d.resumable ? '，可从断点续跑' : '；周报请重新发起'))
+      + (d.resumable ? '，可从断点续跑' : '；追踪报告请重新发起'))
   } catch (e) {
     toast('加载失败：' + (e as Error).message)
   }
@@ -684,7 +699,7 @@ async function openLink(id: string): Promise<void> {
 /* ---------- 下载 ---------- */
 function downloadMd(): void {
   if (!result.value) return
-  download(result.value.report || '', `竞品周报_${runId.value || 'run'}.md`, 'text/markdown;charset=utf-8')
+  download(result.value.report || '', `竞品追踪报告_${runId.value || 'run'}.md`, 'text/markdown;charset=utf-8')
 }
 
 /* 导出 Word：用 Word 能打开的 HTML 封装，避免引入 docx 依赖 */
@@ -693,7 +708,7 @@ function downloadWord(): void {
   const body = renderMd(result.value.report || '')
   const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office"
     xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
-    <head><meta charset="utf-8"><title>竞品动态周报</title>
+    <head><meta charset="utf-8"><title>竞品追踪报告</title>
     <style>
       body { font-family: "Microsoft YaHei", "SimSun", serif; font-size: 11pt; line-height: 1.8; }
       h1 { font-size: 18pt; } h2 { font-size: 14pt; margin-top: 18pt; }
@@ -701,7 +716,7 @@ function downloadWord(): void {
       th, td { border: 1px solid #999; padding: 5px 8px; font-size: 9.5pt; }
       th { background: #F2F2F2; } blockquote { color: #555; border-left: 3px solid #ccc; padding-left: 10px; }
     </style></head><body>${body}</body></html>`
-  download('\ufeff' + html, `竞品周报_${runId.value || 'run'}.doc`, 'application/msword;charset=utf-8')
+  download('\ufeff' + html, `竞品追踪报告_${runId.value || 'run'}.doc`, 'application/msword;charset=utf-8')
   toast('已导出 Word，可直接在 Word 中打开继续编辑')
 }
 
@@ -735,13 +750,13 @@ async function copyLink(): Promise<void> {
   if (!runId.value) return
   const url = `${location.origin}${location.pathname}?run=${encodeURIComponent(runId.value)}`
   const ok = await copyText(url)
-  toast(ok ? '链接已复制，同事打开即可复看本次周报' : '复制失败，请手动复制地址栏')
+  toast(ok ? '链接已复制，同事打开即可复看本次追踪报告' : '复制失败，请手动复制地址栏')
 }
 
 /** 没存过偏好时跟随服务端配置，避免前后端各写一套默认值。 */
 async function syncServerDefaults(): Promise<void> {
   try {
-    const d = await api.get<{ limits?: { days?: number; max_companies?: number } }>('/api/system')
+    const d = await api.get<{ limits?: { days?: number; max_companies?: number } }>('/api/governance/system')
     const n = Number(d.limits?.days)
     if (!readRaw('mj_compare_days') && n > 0) days.value = n
     const m = Number(d.limits?.max_companies)
@@ -774,7 +789,7 @@ onBeforeUnmount(() => {
     <div v-if="stage === 1">
       <section class="card">
         <div class="sec-h">
-          <h3>竞品周报 · 任务配置</h3>
+          <h3>竞品追踪 · 任务配置</h3>
         </div>
         <div class="pad">
           <div class="mon-top">
@@ -784,7 +799,7 @@ onBeforeUnmount(() => {
                 <div class="fl">回溯天数</div>
                 <input v-model.number="days" type="number" min="3" max="365" class="fi-days">
               </div>
-              <button class="btn btn-primary" :disabled="running" @click="start">生成周报</button>
+              <button class="btn btn-primary" :disabled="running" @click="start">生成追踪报告</button>
             </div>
           </div>
           <MonitorTableCard
@@ -913,7 +928,7 @@ onBeforeUnmount(() => {
         </div>
 
         <div v-if="pkSuggest.length" class="pk-sug">
-          <div class="pk-sh">最近周报跑过的公司</div>
+          <div class="pk-sh">最近追踪跑过的公司</div>
           <button
             v-for="s in pkSuggest" :key="s" type="button" class="pk-sugbtn"
             @click="togglePick({ name: s })"
@@ -959,6 +974,10 @@ onBeforeUnmount(() => {
             <label>工商全称</label>
             <input v-model.trim="monForm.full_name" class="fi" type="text" placeholder="可选">
           </div>
+          <div class="mf wide">
+            <label>官网</label>
+            <input v-model.trim="monForm.website" class="fi" type="text" placeholder="example.com，点补全时也会自动尝试获取">
+          </div>
         </div>
         <template #footer>
           <button class="btn btn-primary" @click="saveMonitorEdit">保存</button>
@@ -995,7 +1014,7 @@ onBeforeUnmount(() => {
       <section class="card section-gap">
         <div class="tabs">
           <div class="seg">
-            <div class="seg-i" :class="{ on: tab === 'report' }" @click="tab = 'report'">周报正文</div>
+            <div class="seg-i" :class="{ on: tab === 'report' }" @click="tab = 'report'">追踪报告</div>
             <div class="seg-i" :class="{ on: tab === 'diff' }" @click="tab = 'diff'">横向对比</div>
             <div class="seg-i" :class="{ on: tab === 'src' }" @click="tab = 'src'">来源与证据</div>
           </div>

@@ -1,5 +1,5 @@
 """
-成稿：把事实组织成一份可以直接引用的情报周报。
+成稿：把事实组织成一份可以直接引用的企业洞察报告。
 
 结构固定五段——事实 / 变化 / 判断 / 建议 / 待验证。
 这不是排版偏好，是防止"AI 把推测写成结论"的结构性约束：
@@ -164,7 +164,7 @@ def render_markdown(*, company: str, entity: dict, profile: dict, quote: dict,
     L: list[str] = []
     A = L.append
 
-    A(f"# {company} · 情报周报")
+    A(f"# {company} · 企业洞察报告")
     A("")
     A(f"> 生成时间：{ts} ｜ 覆盖窗口：近 {run_meta.get('days', 30)} 天 ｜ "
       f"材料：{len(docs)} 份（公告 {sum(1 for d in docs if d['kind'] == 'announcement')}，"

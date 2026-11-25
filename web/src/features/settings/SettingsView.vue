@@ -8,9 +8,7 @@ import { confirmAsk } from '../../shared/composables/confirm'
 import { DEFAULT_ACTOR, actorName, setActorName } from '../../shared/composables/identity'
 import ModelProfilesCard from './components/ModelProfilesCard.vue'
 import RegistryCard from './components/RegistryCard.vue'
-import SystemStatusCard from './components/SystemStatusCard.vue'
-import AuditCard from './components/AuditCard.vue'
-import type { AuditRow, LlmConfig, Profile, Provider, SystemInfo, TestResp } from './types'
+import type { LlmConfig, Profile, Provider, TestResp } from './types'
 
 const providers = ref<Provider[]>([])
 const cfg = ref<LlmConfig | null>(null)
@@ -29,15 +27,6 @@ const editName = ref('')
 const form = reactive({ base: '', key: '', model: '', timeout: 90 })
 
 const actor = ref(actorName())
-const sys = ref<SystemInfo | null>(null)
-const sysErr = ref('')
-
-const auditRows = ref<AuditRow[]>([])
-const auditTotal = ref(0)
-const auditActions = ref<string[]>([])
-const auditQ = ref('')
-const auditAction = ref('')
-const auditBusy = ref(false)
 
 const groups = computed(() => {
   const out: { name: string; items: Provider[] }[] = []
@@ -72,43 +61,13 @@ function apply(next: LlmConfig): void {
 async function load(): Promise<void> {
   loading.value = true
   try {
-    apply(await api.get<LlmConfig>('/api/llm/config'))
+    apply(await api.get<LlmConfig>('/api/access/llm/config'))
     cfgErr.value = ''
   } catch (e) {
     cfgErr.value = (e as Error).message
     toast('读取配置失败：' + (e as Error).message)
   } finally {
     loading.value = false
-  }
-}
-
-async function loadSystem(): Promise<void> {
-  try {
-    sys.value = await api.get<SystemInfo>('/api/system')
-    sysErr.value = ''
-  } catch (e) {
-    sys.value = null
-    sysErr.value = (e as Error).message
-  }
-}
-
-async function loadAudit(): Promise<void> {
-  auditBusy.value = true
-  try {
-    const d = await api.get<{ audit: AuditRow[]; total: number; actions: string[] }>('/api/audit', {
-      limit: 60,
-      q: auditQ.value.trim() || undefined,
-      action: auditAction.value || undefined,
-    })
-    auditRows.value = d.audit || []
-    auditTotal.value = typeof d.total === 'number' ? d.total : auditRows.value.length
-    if ((d.actions || []).length) auditActions.value = d.actions
-  } catch (e) {
-    toast('读取审计日志失败：' + (e as Error).message)
-    auditRows.value = []
-    auditTotal.value = 0
-  } finally {
-    auditBusy.value = false
   }
 }
 
@@ -176,7 +135,7 @@ async function saveProfile(): Promise<void> {
   }
   saving.value = true
   try {
-    apply(await api.post<LlmConfig>('/api/llm/config', {
+    apply(await api.post<LlmConfig>('/api/access/llm/config', {
       action: 'save',
       id: editId.value || undefined,
       name: editName.value.trim() || form.model.trim(),
@@ -188,8 +147,6 @@ async function saveProfile(): Promise<void> {
     }))
     editOpen.value = false
     toast('已保存并启用，后续运行立即使用该模型')
-    loadSystem()
-    loadAudit()
   } catch (e) {
     toast('保存失败：' + (e as Error).message)
   } finally {
@@ -205,7 +162,7 @@ async function testProfile(): Promise<void> {
   testing.value = true
   testRes.value = null
   try {
-    testRes.value = await api.post<TestResp>('/api/llm/test', {
+    testRes.value = await api.post<TestResp>('/api/access/llm/test', {
       base: form.base.trim(),
       key: form.key.trim(),
       model: form.model.trim(),
@@ -223,12 +180,10 @@ async function activateProfile(p: Profile): Promise<void> {
   if (p.active || busyRow.value) return
   busyRow.value = 'activate:' + p.id
   try {
-    apply(await api.post<LlmConfig>('/api/llm/config', {
+    apply(await api.post<LlmConfig>('/api/access/llm/config', {
       action: 'activate', id: p.id, name: p.name, actor: actorName(),
     }))
     toast(`已启用：${p.name}`)
-    loadSystem()
-    loadAudit()
   } catch (e) {
     toast('启用失败：' + (e as Error).message)
   } finally {
@@ -248,12 +203,10 @@ async function deleteProfile(p: Profile): Promise<void> {
   if (!ok) return
   busyRow.value = 'delete:' + p.id
   try {
-    apply(await api.post<LlmConfig>('/api/llm/config', {
+    apply(await api.post<LlmConfig>('/api/access/llm/config', {
       action: 'delete', id: p.id, name: p.name, actor: actorName(),
     }))
     toast('已删除：' + p.name)
-    loadSystem()
-    loadAudit()
   } catch (e) {
     toast('删除失败：' + (e as Error).message)
   } finally {
@@ -270,12 +223,10 @@ async function clearActive(): Promise<void> {
   })
   if (!ok) return
   try {
-    apply(await api.post<LlmConfig>('/api/llm/config', {
+    apply(await api.post<LlmConfig>('/api/access/llm/config', {
       action: 'clear', clear: true, actor: actorName(),
     }))
     toast('已停用，已回到规则引擎')
-    loadSystem()
-    loadAudit()
   } catch (e) {
     toast('停用失败：' + (e as Error).message)
   }
@@ -283,8 +234,6 @@ async function clearActive(): Promise<void> {
 
 onMounted(() => {
   load()
-  loadSystem()
-  loadAudit()
 })
 </script>
 
@@ -376,14 +325,6 @@ onMounted(() => {
     </AppModal>
 
     <RegistryCard />
-
-    <SystemStatusCard :sys="sys" :error="sysErr" @refresh="loadSystem" />
-
-    <AuditCard
-      v-model:q="auditQ" v-model:action="auditAction"
-      :rows="auditRows" :total="auditTotal" :actions="auditActions" :busy="auditBusy"
-      @refresh="loadAudit"
-    />
   </div>
 </template>
 
