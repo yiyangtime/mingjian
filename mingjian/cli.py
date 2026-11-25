@@ -584,6 +584,8 @@ def cmd_optimize(args) -> int:
                     tail = f"｜失败 {q.get('error') or ''}"
                 elif q.get("status") == "empty":
                     tail = "｜无结果"
+                if q.get("via") == "baidu":
+                    tail += "｜来源 百度资讯（东财失败回退）"
                 print(f"  {q['query']}：{q.get('ms', 0)}ms｜候选 {q['raw']}"
                       f"｜入围 {q['kept']}｜重复 {q['duplicate']}"
                       f"｜不相关 {q['irrelevant']}{tail}")

@@ -185,12 +185,16 @@ def find(products: str, region: str = "", days: int = 180, limit: int = 12,
     docs: list[dict] = []
     seen: set[str] = set()
     scanned = 0
+    fallback = 0
     for q in qs:
         for page in (1, 2, 3):
+            meta: dict = {}
             try:
-                items = eastmoney.search(q, page=page, size=20)
+                items = eastmoney.search_any(q, page=page, size=20, meta=meta)
             except Exception:
                 items = []
+            if meta.get("via") == "baidu":
+                fallback += 1
             if not items:
                 break
             scanned += len(items)
@@ -316,6 +320,8 @@ def find(products: str, region: str = "", days: int = 180, limit: int = 12,
         notes.append(f"已按「{region}」加了一组地域联合检索，用来捞区域性对手；不代表地理上就只有这些。")
     if noisy:
         notes.append(f"检索命中的 {noisy} 篇行情稿/早报快报已剔除（品类词被按词切分，会撞上「直线拉升」这类说法）。")
+    if fallback:
+        notes.append(f"东方财富检索失败，已有 {fallback} 组词回退到百度资讯首屏；该源只给摘要，线索可能不全。")
     if agg:
         notes.append(f"{agg} 篇是公告汇总稿（单篇含 ≥{_AGG_MAX} 家公司），已整篇丢弃。")
     if failed:
@@ -356,7 +362,7 @@ def clues(keyword: str, limit: int = 6) -> list[dict]:
     if hit and time.time() - hit[0] < _CLUE_TTL:
         return [dict(x) for x in hit[1][:limit]]
     try:
-        docs = eastmoney.search(kw, page=1, size=20)
+        docs = eastmoney.search_any(kw, page=1, size=20)
     except Exception:
         docs = []
     counts: dict[str, int] = {}

@@ -209,12 +209,15 @@ python -m mingjian optimize history
 - 运行期：起点读取一次，版本写入 `runs.params` 与检查点；每路实际召回条数写入
   `runs.stats.search_recall`；
 - 采集留痕：每路的候选 / 入围 / 重复 / 不相关条数，以及 `status`（ok / empty /
-  error）、`error`（含 HTTP 状态码）与 `ms`，写入 `runs.stats.collect.queries`；
-  失败路数与无结果路数汇总到 `collect.failed` / `collect.empty`；
+  error）、`error`（含 HTTP 状态码）、`ms` 与实际来源 `via`，写入
+  `runs.stats.collect.queries`；失败路数与无结果路数汇总到 `collect.failed` /
+  `collect.empty`；
   被丢弃的条目（标题、链接、来源、发布时间、拒因 `duplicate` / `irrelevant`）
   逐行写入 `output/collect/<run_id>.jsonl`，不存正文；
 - 失败语义：搜索失败不再与“没有结果”同形——失败路不计入召回，日志与
-  `optimize collect` 都会标出；全部路失败时运行错误里记一条；
+  `optimize collect` 都会标出；全部路失败时运行错误里记一条；东财失败时回退
+  百度资讯首屏，命中后 `via=baidu`、`fallback_from` 保留主源失败原因；主源正常
+  空结果不回退，避免同一查询在不同源之间悄悄换口径；
 - 公告覆盖对照：采集完成后逐条公告找最相近的资讯，按“公告核心词的 bigram 被
   资讯覆盖的比例”打分；低于阈值的缺口写入 `output/collect/<run_id>-gap.jsonl`，
   汇总写入 `runs.stats.coverage`（公告数 / 覆盖数 / 比例 / 阈值）；
