@@ -42,7 +42,7 @@ def chat_with(base: str, key: str, model: str, timeout: float, messages: list[di
     }
     url = base.rstrip("/") + "/chat/completions"
     raw = net.post_json(url, payload, headers={"Authorization": f"Bearer {key}"},
-                        timeout=timeout, retries=1)
+                        timeout=timeout, retries=1, strict=True)
     data = json.loads(raw)
     choices = data.get("choices") or []
     if not choices:

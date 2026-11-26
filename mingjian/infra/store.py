@@ -509,13 +509,25 @@ _DOC_COLS = ("id", "run_id", "entity_key", "kind", "title", "url", "source",
 
 
 def add_document(doc: dict) -> None:
+    add_documents([doc])
+
+
+def add_documents(docs: list[dict]) -> None:
+    """批量写入/更新文档：一次事务提交，避免逐条落库。
+
+    第 2、3 步都会整批重写材料清单，逐条事务在数十份文档时会明显拖慢步骤。
+    """
+    if not docs:
+        return
     with tx() as c:
-        c.execute(
-            dbmod.upsert_sql("documents", _DOC_COLS, ("id",), c.dialect),
-            (doc["id"], doc["run_id"], doc["entity_key"], doc["kind"], doc.get("title", ""),
-             doc.get("url", ""), doc.get("source", ""), doc.get("published_at", ""),
-             doc.get("body", ""), doc.get("evidence_level", "title"), doc.get("fetched_at", now()),
-             json.dumps(doc.get("extra") or {}, ensure_ascii=False)))
+        for doc in docs:
+            c.execute(
+                dbmod.upsert_sql("documents", _DOC_COLS, ("id",), c.dialect),
+                (doc["id"], doc["run_id"], doc["entity_key"], doc["kind"], doc.get("title", ""),
+                 doc.get("url", ""), doc.get("source", ""), doc.get("published_at", ""),
+                 doc.get("body", ""), doc.get("evidence_level", "title"),
+                 doc.get("fetched_at", now()),
+                 json.dumps(doc.get("extra") or {}, ensure_ascii=False)))
 
 
 def docs_of_run(run_id: str):

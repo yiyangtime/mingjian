@@ -568,6 +568,41 @@ def _context_budget():
 
 # ---------------------------------------------------------------- 调度与落库
 
+@case("批量文档落库：单事务写入、重复写入走更新")
+def _store_batch_docs():
+    import shutil
+    import tempfile
+    tmpdir = pathlib.Path(tempfile.mkdtemp(prefix="mingjian_docs_"))
+    old_path, old_url, old_conn = store.DB_PATH, store.DB_URL, getattr(store._local, "conn", None)
+    store.DB_PATH = tmpdir / "t.db"
+    store.DB_URL = ""
+    store._local.conn = None
+    try:
+        store.init()
+        rid = "R-batch"
+        docs = [{"id": f"{rid}-D{i}", "run_id": rid, "entity_key": "000000",
+                 "kind": "announcement", "title": f"公告{i}",
+                 "url": f"https://example.invalid/{i}", "source": "巨潮",
+                 "published_at": f"2026-11-2{i}", "body": "正文",
+                 "evidence_level": "full"} for i in range(1, 4)]
+        store.add_documents(docs)
+        rows = store.docs_of_run(rid)
+        assert len(rows) == 3, rows
+        assert {r["title"] for r in rows} == {"公告1", "公告2", "公告3"}, rows
+        docs[0]["title"] = "公告1-改"
+        store.add_documents(docs)
+        rows = store.docs_of_run(rid)
+        assert len(rows) == 3 and any(r["title"] == "公告1-改" for r in rows), rows
+        store.add_documents([])
+    finally:
+        if getattr(store._local, "conn", None) is not None:
+            store._local.conn.close()
+        store._local.conn = old_conn
+        store.DB_PATH = old_path
+        store.DB_URL = old_url
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 @case("定时调度：每天/每周的下次触发时间")
 def _sched_next():
     from datetime import datetime
@@ -1347,6 +1382,122 @@ def _search_status():
         baidu.search = old_backup
 
 
+@case("同域限速：预约下一时刻，等待不阻塞其它域名")
+def _net_throttle():
+    import threading
+    import time
+
+    from mingjian.core import net
+
+    old_interval = CFG.host_interval
+    old_next = dict(net._next_ok)
+    try:
+        CFG.host_interval = 0.4
+        net._next_ok.clear()
+        net._throttle("a.example")            # 首次不等待，只预约下一次
+        worker = threading.Thread(target=net._throttle, args=("a.example",))
+        t0 = time.time()
+        worker.start()
+        time.sleep(0.05)                       # 让同域请求进入等待
+        t_b = time.time()
+        net._throttle("b.example")
+        wait_other = time.time() - t_b
+        worker.join(timeout=3)
+        elapsed = time.time() - t0
+        assert not worker.is_alive(), "同域请求未返回"
+        assert elapsed >= 0.3, f"同域未限速：{elapsed:.3f}s"
+        assert wait_other < 0.2, f"其它域被同域等待阻塞：{wait_other:.3f}s"
+    finally:
+        CFG.host_interval = old_interval
+        net._next_ok.clear()
+        net._next_ok.update(old_next)
+
+
+@case("TLS 校验：默认按域名降级，模型与推送强制严格")
+def _tls_strict():
+    import ssl
+    import urllib.request
+
+    from mingjian.core import net
+    from mingjian.infra import llm as llm_mod
+
+    class _Resp:
+        headers = {"Content-Type": "text/plain; charset=utf-8"}
+        status = 200
+
+        def read(self):
+            return b"ok"
+
+        def geturl(self):
+            return "https://gov.example/a"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def strict_fails(req, timeout=None, context=None):
+        if context is net._strict_ctx:
+            raise ssl.SSLCertVerificationError("certificate verify failed")
+        return _Resp()
+
+    old_open = urllib.request.urlopen
+    old_relaxed = set(net._relaxed_hosts)
+    old_interval = CFG.host_interval
+    try:
+        CFG.host_interval = 0
+        net._relaxed_hosts.clear()
+        urllib.request.urlopen = strict_fails
+        assert net.fetch("https://gov.example/a", retries=0).text == "ok"
+        assert "gov.example" in net._relaxed_hosts, net._relaxed_hosts
+
+        seen_ctx = []
+
+        def record(req, timeout=None, context=None):
+            seen_ctx.append(context)
+            return _Resp()
+
+        urllib.request.urlopen = record
+        net.fetch("https://gov.example/b", retries=0)
+        assert seen_ctx == [net._relaxed_ctx], seen_ctx
+
+        urllib.request.urlopen = strict_fails
+        try:
+            net.fetch("https://api.example/x", retries=0, strict=True)
+        except net.FetchError as e:
+            assert "certificate" in str(e).lower(), e
+        else:
+            raise AssertionError("strict=True 不应降级")
+        assert "api.example" not in net._relaxed_hosts
+    finally:
+        urllib.request.urlopen = old_open
+        CFG.host_interval = old_interval
+        net._relaxed_hosts.clear()
+        net._relaxed_hosts.update(old_relaxed)
+
+    # 模型调用与推送显式要求严格校验
+    seen = []
+    old_post = net.post_json
+
+    def fake_post(url, payload, **kw):
+        seen.append(kw)
+        if "chat/completions" in url:
+            return '{"choices":[{"message":{"content":"ok"}}]}'
+        return '{"code":0}'
+
+    try:
+        net.post_json = fake_post
+        llm_mod.chat_with("https://api.example/v1", "k", "m", 3,
+                          [{"role": "user", "content": "x"}])
+        push._send({"id": "t", "type": "feishu", "name": "飞书",
+                    "url": "https://open.feishu.cn/open-apis/bot/v2/hook/x",
+                    "secret": "", "chat_id": "", "enabled": True}, "标题", "正文")
+        assert len(seen) == 2 and all(call.get("strict") is True for call in seen), seen
+    finally:
+        net.post_json = old_post
+
+
 @case("检索回退：主源风控时走备用源并留痕")
 def _search_fallback():
     from mingjian.infra.sources import baidu, eastmoney
@@ -2058,7 +2209,7 @@ def _push_protocol():
         push.save_channel({"type": "webhook", "name": "坏渠道", "url": "https://bad.example/hook"})
         calls = []
 
-        def fake_post(url, body, headers=None, timeout=10, retries=1):
+        def fake_post(url, body, headers=None, timeout=10, retries=1, **_kw):
             calls.append(url)
             if "bad" in url:
                 raise RuntimeError("connection reset")

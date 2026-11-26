@@ -144,7 +144,7 @@ python tools/dbinit.py --dialect postgres --stdout    # 只看不写
 
 ## 六、验证到什么程度
 
-- **SQLite**：全链路实测——自测 64 项、服务启动冒烟、`dbinit.py --check`
+- **SQLite**：全链路实测——自测 67 项、服务启动冒烟、`dbinit.py --check`
   比对 13 张表 / 21 个索引。
 - **PostgreSQL / MySQL**：DDL、占位符转译、保留字与百分号处理都有单元断言，
   但**没有在真实实例上跑过**（开发机没有这两个服务）。首次接库请务必

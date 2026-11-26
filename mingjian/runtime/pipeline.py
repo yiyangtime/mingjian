@@ -251,23 +251,45 @@ class Pipeline:
     def _s2_collect(self) -> None:
         self._step(2, "多源采集", "start")
         ent = self.entity
-        anns: list[dict] = []
-        news: list[dict] = []
-
-        if ent.get("code"):
-            try:
-                anns = cninfo.announcements(ent["code"], ent["org_id"], ent["column"],
-                                            days=self.cfg.days, page_size=self.cfg.max_ann)
-                self._log(f"巨潮公告：取得 {len(anns)} 条（近 {self.cfg.days} 天）")
-            except Exception as e:
-                self.errors.append(f"公告采集失败：{e}")
-                self._log(f"公告采集失败：{type(e).__name__}", "warn")
-
         trace: dict = {}
-        try:
-            news = eastmoney.news_bundle(self.company, ent.get("short_name") or self.company,
-                                         days=self.cfg.days,
-                                         terms=self.search_terms or None, trace=trace)
+
+        def collect_anns() -> tuple[list[dict] | None, str]:
+            if not ent.get("code"):
+                return None, ""
+            try:
+                rows = cninfo.announcements(ent["code"], ent["org_id"], ent["column"],
+                                            days=self.cfg.days, page_size=self.cfg.max_ann)
+                return rows, ""
+            except Exception as e:
+                return [], f"{type(e).__name__}: {e}"
+
+        def collect_news() -> tuple[list[dict], str]:
+            try:
+                rows = eastmoney.news_bundle(
+                    self.company, ent.get("short_name") or self.company,
+                    days=self.cfg.days, terms=self.search_terms or None, trace=trace)
+                return rows, ""
+            except Exception as e:
+                return [], f"{type(e).__name__}: {e}"
+
+        # 公告在巨潮、资讯在东财/百度，分属不同域，并行采集；同域限速由 net 统一保证
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            f_ann = ex.submit(collect_anns)
+            f_news = ex.submit(collect_news)
+            anns, ann_err = f_ann.result()
+            news, news_err = f_news.result()
+
+        if ann_err:
+            self.errors.append(f"公告采集失败：{ann_err}")
+            self._log(f"公告采集失败：{ann_err.split(':')[0]}", "warn")
+        elif anns is not None:
+            self._log(f"巨潮公告：取得 {len(anns)} 条（近 {self.cfg.days} 天）")
+        anns = anns or []
+
+        if news_err:
+            self.errors.append(f"资讯采集失败：{news_err}")
+            self._log(f"资讯采集失败：{news_err.split(':')[0]}", "warn")
+        else:
             recall: dict[str, int] = {}
             for d in news:
                 q = str((d.get("extra") or {}).get("query") or "")
@@ -278,9 +300,6 @@ class Pipeline:
             self._record_collect(trace)
             self._log(f"资讯检索：取得 {len(news)} 条（{len(recall)} 路有召回，"
                       f"过滤 {len(trace.get('rejected') or [])} 条）")
-        except Exception as e:
-            self.errors.append(f"资讯采集失败：{e}")
-            self._log(f"资讯采集失败：{type(e).__name__}", "warn")
 
         # 赋值 id 与主体信息
         for d in anns + news:
@@ -302,8 +321,7 @@ class Pipeline:
         self.docs = merged
         self._record_coverage(merged)
         # 第 2 步就把材料清单落库：即便第 3 步抓正文时中断，续跑也不用重新检索
-        for d in self.docs:
-            store.add_document(d)
+        store.add_documents(self.docs)
         self._save_cp(2)
         self._step(2, "多源采集", "done", f"公告 {len(anns)} · 资讯 {len(news)}")
 
@@ -428,8 +446,7 @@ class Pipeline:
                     failed += 1
 
         self._log(f"正文解析完成：成功 {ok}，图片型 {image_pdf}，失败 {failed}")
-        for d in self.docs:
-            store.add_document(d)
+        store.add_documents(self.docs)
         self._save_cp(3)
         self._step(3, "正文解析", "done", f"全文 {ok} · 图片 {image_pdf} · 失败 {failed}")
 

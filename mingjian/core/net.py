@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import gzip
 import io
+import logging
 import random
 import re
 import ssl
@@ -22,18 +23,24 @@ from dataclasses import dataclass
 
 from ..config import CFG
 
+LOG = logging.getLogger("mingjian.net")
+
 UAS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
 ]
 
-_ctx = ssl.create_default_context()
-_ctx.check_hostname = False
-_ctx.verify_mode = ssl.CERT_NONE
+# 默认严格校验证书；个别站点证书链不全时，采集请求按域名记忆并降级重试一次。
+# 模型调用与报告推送传 strict=True，任何时候都不降级。
+_strict_ctx = ssl.create_default_context()
+_relaxed_ctx = ssl.create_default_context()
+_relaxed_ctx.check_hostname = False
+_relaxed_ctx.verify_mode = ssl.CERT_NONE
 
 _lock = threading.Lock()
-_last_hit: dict[str, float] = {}
+_next_ok: dict[str, float] = {}
+_relaxed_hosts: set[str] = set()
 
 
 class FetchError(Exception):
@@ -58,12 +65,28 @@ class Response:
 
 
 def _throttle(host: str) -> None:
+    """同域限速：锁内只预约下一次可用时刻，等待放到锁外。
+
+    旧实现持锁 sleep，一个域排队时其它域也被挡住；正文抓取是多线程的，
+    那样会把并发退化成串行。预约语义下同域仍严格隔开 host_interval。
+    """
     with _lock:
-        last = _last_hit.get(host, 0.0)
-        wait = CFG.host_interval - (time.time() - last)
-        if wait > 0:
-            time.sleep(wait + random.uniform(0, 0.15))
-        _last_hit[host] = time.time()
+        now = time.time()
+        prev = _next_ok.get(host)
+        slot = now if prev is None else max(prev + CFG.host_interval, now)
+        if slot > now:
+            slot += random.uniform(0, 0.15)
+        _next_ok[host] = slot
+    wait = slot - time.time()
+    if wait > 0:
+        time.sleep(wait)
+
+
+def _cert_error(e: BaseException) -> bool:
+    """是否为证书链校验失败（urllib 会包在 URLError.reason 里）。"""
+    reason = getattr(e, "reason", e)
+    return (isinstance(reason, ssl.SSLCertVerificationError)
+            or "CERTIFICATE_VERIFY_FAILED" in str(reason))
 
 
 def _decode(body: bytes, content_type: str) -> str:
@@ -93,13 +116,16 @@ def _decode(body: bytes, content_type: str) -> str:
 
 def fetch(url: str, *, data: bytes | None = None, headers: dict | None = None,
           timeout: float | None = None, retries: int | None = None,
-          referer: str | None = None) -> Response:
+          referer: str | None = None, strict: bool = False) -> Response:
     timeout = timeout or CFG.timeout
     retries = CFG.retries if retries is None else retries
     last_err = "unknown"
+    host = urllib.parse.urlsplit(url).netloc
+    # strict=True 用于模型与推送：证书异常直接失败，不降级
+    ctx = _strict_ctx if strict or host not in _relaxed_hosts else _relaxed_ctx
 
-    for attempt in range(retries + 1):
-        host = urllib.parse.urlsplit(url).netloc
+    attempt = 0
+    while attempt <= retries:
         _throttle(host)
         h = {
             "User-Agent": random.choice(UAS),
@@ -114,7 +140,7 @@ def fetch(url: str, *, data: bytes | None = None, headers: dict | None = None,
             h.update(headers)
         try:
             req = urllib.request.Request(url, data=data, headers=h)
-            with urllib.request.urlopen(req, timeout=timeout, context=_ctx) as r:
+            with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
                 body = r.read()
                 enc = (r.headers.get("Content-Encoding") or "").lower()
                 if "gzip" in enc:
@@ -144,10 +170,18 @@ def fetch(url: str, *, data: bytes | None = None, headers: dict | None = None,
             if e.code in (403, 404, 410, 451):
                 raise FetchError(url, last_err, e.code)
         except Exception as e:
+            if not strict and ctx is _strict_ctx and _cert_error(e):
+                with _lock:
+                    _relaxed_hosts.add(host)
+                LOG.warning("TLS 证书校验失败，已对该域名降级重试：%s", host)
+                ctx = _relaxed_ctx
+                last_err = "TLS 证书校验失败（已降级重试）"
+                continue          # 不消耗重试次数，立即用宽松上下文再试
             last_err = f"{type(e).__name__}: {str(e)[:80]}"
 
-        if attempt < retries:
-            time.sleep(0.6 * (attempt + 1) + random.uniform(0, 0.4))
+        attempt += 1
+        if attempt <= retries:
+            time.sleep(0.6 * attempt + random.uniform(0, 0.4))
 
     raise FetchError(url, last_err)
 

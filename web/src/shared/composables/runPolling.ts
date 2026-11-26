@@ -21,7 +21,7 @@ export interface RunPollHooks {
   onError?: (err: Error) => void
 }
 
-export function useRunPolling(intervalMs = 800) {
+export function useRunPolling(intervalMs = 800, maxIntervalMs = 2000) {
   const runId = ref('')
   const active = ref(false)
   let timer: number | undefined
@@ -29,19 +29,16 @@ export function useRunPolling(intervalMs = 800) {
 
   function stop(): void {
     if (timer) {
-      window.clearInterval(timer)
+      window.clearTimeout(timer)
       timer = undefined
     }
     active.value = false
   }
 
-  /** since 用于深链接重进：先回放已有事件，再从该游标继续增量拉取。 */
-  function start(id: string, hooks: RunPollHooks, since = 0): void {
-    stop()
-    runId.value = id
-    active.value = true
-    seq = Math.max(0, Number(since) || 0)
-    timer = window.setInterval(async () => {
+  /** 逐步退避：进度由事件驱动，轮询只做兜底，长任务不必每秒打满请求。 */
+  function schedule(id: string, hooks: RunPollHooks, delay: number): void {
+    timer = window.setTimeout(async () => {
+      timer = undefined
       let d: RunPoll
       try {
         d = await api.get<RunPoll>(`/api/company/run/${id}`, { since: seq })
@@ -58,12 +55,26 @@ export function useRunPolling(intervalMs = 800) {
       if (d.status === 'done') {
         stop()
         hooks.onDone(d)
-      } else if (d.status === 'failed' || d.status === 'cancelled') {
+        return
+      }
+      if (d.status === 'failed' || d.status === 'cancelled') {
         stop()
         if (d.status === 'failed') hooks.onFailed?.(d)
         else hooks.onCancelled?.(d)
+        return
       }
-    }, intervalMs)
+      if (!active.value) return
+      schedule(id, hooks, Math.min(Math.round(delay * 1.4), Math.max(intervalMs, maxIntervalMs)))
+    }, delay)
+  }
+
+  /** since 用于深链接重进：先回放已有事件，再从该游标继续增量拉取。 */
+  function start(id: string, hooks: RunPollHooks, since = 0): void {
+    stop()
+    runId.value = id
+    active.value = true
+    seq = Math.max(0, Number(since) || 0)
+    schedule(id, hooks, intervalMs)
   }
 
   onScopeDispose(stop)

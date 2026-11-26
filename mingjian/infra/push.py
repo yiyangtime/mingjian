@@ -268,7 +268,7 @@ def _check(tid: str, resp: str) -> None:
 
 def _send(c: dict, title: str, text: str) -> None:
     url, body, headers = _payload(c, title, text)
-    resp = net.post_json(url, body, headers=headers, timeout=10, retries=1)
+    resp = net.post_json(url, body, headers=headers, timeout=10, retries=1, strict=True)
     _check(c["type"], resp)
 
 
