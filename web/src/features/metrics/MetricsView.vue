@@ -174,9 +174,11 @@ async function loadCompany(name?: string, force = false): Promise<void> {
 }
 
 const entityText = computed(() => {
+  const name = company.value.trim()
+  if (!name) return ''
   const e = entity.value
-  if (!e.code && !e.market) return '非上市/未解析'
-  return (e.code ? e.code + ' · ' : '') + (e.market || '')
+  const id = (e.code ? e.code + ' · ' : '') + (e.market || '')
+  return name + ' · ' + (id || '非上市/未解析')
 })
 
 /* ---------- 专题头 ---------- */
@@ -420,7 +422,8 @@ onMounted(() => {
         <div class="m-list">
           <div
             v-for="m in metrics" :key="m.k" class="m-item"
-            :class="{ on: cur === m.k }" @click="selectMetric(m.k)"
+            :class="{ on: cur === m.k }" title="点击查看口径、来源与关联情报"
+            @click="selectMetric(m.k)"
           >
             <div class="m-top">
               <div class="m-name">{{ m.name }}</div>

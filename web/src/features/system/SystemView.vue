@@ -4,6 +4,7 @@ import AppHeader from '../../shared/components/AppHeader.vue'
 import { api } from '../../shared/api'
 import { toast } from '../../shared/composables/toast'
 import SystemStatusCard from './components/SystemStatusCard.vue'
+import ScheduleCard from './components/ScheduleCard.vue'
 import AuditCard from './components/AuditCard.vue'
 import type { AuditRow, SystemInfo } from './types'
 
@@ -31,7 +32,7 @@ async function loadAudit(): Promise<void> {
   auditBusy.value = true
   try {
     const d = await api.get<{ audit: AuditRow[]; total: number; actions: string[] }>('/api/governance/audit', {
-      limit: 60,
+      limit: 200,
       q: auditQ.value.trim() || undefined,
       action: auditAction.value || undefined,
     })
@@ -51,6 +52,12 @@ onMounted(() => {
   loadSystem()
   loadAudit()
 })
+
+// 定时任务增删启停都会落审计，状态卡的数据规模也一变同步刷新
+function reloadCards(): void {
+  loadSystem()
+  loadAudit()
+}
 </script>
 
 <template>
@@ -58,6 +65,8 @@ onMounted(() => {
 
   <div class="wrap">
     <SystemStatusCard :sys="sys" :error="sysErr" @refresh="loadSystem" />
+
+    <ScheduleCard @changed="reloadCards" />
 
     <AuditCard
       v-model:q="auditQ" v-model:action="auditAction"

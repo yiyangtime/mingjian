@@ -55,7 +55,7 @@ const emit = defineEmits<{
       <div v-if="!monitors.length" class="mon-empty">暂无监测对象</div>
     </div>
     <button
-      type="button" class="btn btn-ghost btn-sm mon-add"
+      type="button" class="btn btn-ghost btn-sm mon-add" title="新增监测对象" aria-label="新增监测对象"
       :disabled="monitors.length >= max" @click="emit('add')"
     >＋ 新增</button>
   </div>
