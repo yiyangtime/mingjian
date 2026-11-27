@@ -74,14 +74,17 @@ const dragOver = ref(false)
 const pasteOpen = ref(false)
 const pasteName = ref('')
 const pasteText = ref('')
+const GOV_NOTE = '站点：工业和信息化部 · 各省工业和信息化厅'
 const gov = reactive({
   company: '',
   province: '',
-  note: '站点：工业和信息化部 · 各省工业和信息化厅',
+  note: GOV_NOTE,
   busy: false,
   logs: [] as { t: string; msg: string; kind: string }[],
 })
 const govLogsEl = ref<HTMLElement | null>(null)
+// 本批次来自服务端回填时的来源说明（官网取数）；手动新增材料后清空
+const restoredFrom = ref('')
 
 // 抽屉
 const drawerOpen = ref(false)
@@ -174,7 +177,7 @@ async function startRun(): Promise<void> {
   try {
     runLogs.value = []
     addRunLog(`任务 ${TASK_ID} 汇总开始，模板 v1.2（已冻结）`)
-    addRunLog(`数据源：${bundleMeta.value?.dir ? 'materials/ · 服务端解析' : '本次上传'}`)
+    addRunLog(`数据源：${bundleMeta.value?.dir ? 'materials/ · 服务端解析' : restoredFrom.value || '本次上传'}`)
     await sleep(200)
     docs.value.forEach((d) => {
       if (d.status === 'failed') addRunLog(`${d.id} ${d.name.slice(0, 20)} → 解析失败：${d.issue}`, 'err')
@@ -452,9 +455,19 @@ function normDoc(d: Partial<PolicyDoc> | null): PolicyDoc | null {
 function addDocs(list: Partial<PolicyDoc>[]): number {
   if (!list || !list.length) return 0
   const clean = list.map(normDoc).filter(Boolean) as PolicyDoc[]
-  clean.forEach((d) => { d.real = true })
-  docs.value.unshift(...clean)
-  return clean.length
+  // 官网取数带原文链接：回填批次后再取一次会重复，按链接去重；上传材料无 url 不受影响
+  const seen = new Set(docs.value.map((d) => d.url).filter(Boolean))
+  const fresh = clean.filter((d) => {
+    if (!d.url || !seen.has(d.url)) {
+      if (d.url) seen.add(d.url)
+      return true
+    }
+    return false
+  })
+  fresh.forEach((d) => { d.real = true })
+  if (fresh.length) restoredFrom.value = ''
+  docs.value.unshift(...fresh)
+  return fresh.length
 }
 
 function onPick(e: Event): void {
@@ -525,7 +538,10 @@ async function doPaste(): Promise<void> {
 
 async function loadFromServer(manual: boolean): Promise<void> {
   try {
-    const d = await api.get<{ docs: Partial<PolicyDoc>[]; dir?: string; skipped?: string[] }>('/api/policy-radar/scan')
+    const d = await api.get<{
+      docs: Partial<PolicyDoc>[]; dir?: string; skipped?: string[]; restored?: boolean
+      batch?: { company?: string; at?: string; keywords?: string[] }
+    }>('/api/policy-radar/scan')
     const list = d.docs || []
     scanInfo.value = { skipped: d.skipped }
     if (!list.length) {
@@ -536,6 +552,16 @@ async function loadFromServer(manual: boolean): Promise<void> {
     const clean = list.map(normDoc).filter(Boolean) as PolicyDoc[]
     clean.forEach((x) => { x.real = true })
     docs.value = clean
+    if (d.restored) {
+      // 官网取数结果此前只在内存，刷新即空：服务端从最近批次回填，这里标注来源与时间
+      bundleMeta.value = null
+      const b = d.batch || {}
+      if (!gov.company && b.company) gov.company = b.company
+      restoredFrom.value = `官网取数 · ${b.company || '—'}${b.at ? ' · ' + b.at : ''}`
+      gov.note = `已恢复上次批次：${b.company || '官网取数'}${b.at ? '｜' + b.at : ''}｜${clean.length} 份政策公告`
+      if (manual) toast(`已恢复上次批次 ${clean.length} 份`)
+      return
+    }
     bundleMeta.value = { dir: d.dir }
     if (manual) toast(`已从 materials/ 载入 ${clean.length} 份材料`)
   } catch (e) {
@@ -581,7 +607,9 @@ async function loadGovHealth(): Promise<void> {
     const d = await api.get<{ unavailable?: string[] }>('/api/policy-radar/gov/health')
     const bad = d.unavailable || []
     if (!bad.length) return
-    gov.note = `站点：工业和信息化部 · 各省工业和信息化厅　已知取不到：${bad.join('、')}（请改用下方材料上传）`
+    // 与 scan 并行发起，晚返回会踩掉「已恢复上次批次」或本次取数结果：只在默认文案时写入
+    if (gov.note !== GOV_NOTE) return
+    gov.note = `${GOV_NOTE}　已知取不到：${bad.join('、')}（请改用下方材料上传）`
   } catch {
     /* 健康状态拿不到不影响主流程 */
   }
@@ -640,7 +668,7 @@ async function fetchGov(): Promise<void> {
     if (d.cached) govLog('本次结果来自 24 小时内缓存，点按钮可强制刷新')
     const warnN = (d.warnings || []).length
     gov.note = `已完成：${company}｜${list.length} 份政策公告` + (warnN ? `｜${warnN} 项通道告警见日志` : '')
-    toast(`已获取 ${added} 份政策公告`)
+    toast(added ? `已获取 ${added} 份政策公告` : '批次已是最新，无新增政策公告')
   } catch (e) {
     govLog('取数失败：' + (e as Error).message, 'warn')
     toast('取数失败：' + (e as Error).message)

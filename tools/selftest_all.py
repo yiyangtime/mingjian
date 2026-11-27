@@ -3,11 +3,11 @@
 跑法：python tools/selftest_all.py
 
 覆盖：
-  架构边界      —— 复用 selftest_arch.py：后端分层依赖、包根白名单、路由唯一性、前端功能隔离、视图体积棘轮
+  架构边界      —— 复用 selftest_arch.py：后端分层依赖、包根白名单、路由唯一性、import 目标存在、前端功能隔离、视图体积棘轮
   政策解析      —— 复用 selftest_policy.py 的 4 个样本（子进程跑，保持原脚本可独立使用）
   指标拆分      —— 累计数转单季、缺期不出点、报告期名称映射
   专题归因      —— 毛利变动的单位盈利效应与结构效应、按名称对齐的同比
-  政策取数      —— 行业词优先级、省份识别、政策标题判定、相关度打分
+  政策取数      —— 行业词优先级、省份识别、政策标题判定、相关度打分、批次落库与回填
   竞品矩阵      —— 维度×公司对齐，空维度不占行
   技能与记忆    —— 注册表拦截、参数校验、记忆去重/召回/删除、上下文预算截断
   调度与落库    —— 每天/每周下次触发时间、事件 seq、检查点、定时任务读写
@@ -28,7 +28,19 @@ from mingjian.core import context, verify
 from mingjian.infra import llm, llmcfg, push, scheduler, store
 from mingjian.infra.sources import cninfo
 from mingjian.runtime import compare
-from mingjian.services import discover, extract, govpolicy, memory, metrics, optimizer, report, skills, subject, topic
+from mingjian.services import (
+    discover,
+    extract,
+    govpolicy,
+    memory,
+    metrics,
+    optimizer,
+    policy,
+    report,
+    skills,
+    subject,
+    topic,
+)
 
 CASES = []
 
@@ -54,6 +66,120 @@ def _policy_samples():
     r = subprocess.run([sys.executable, str(ROOT / "tools" / "selftest_policy.py")],
                        capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert r.returncode == 0, (r.stdout or "")[-1200:]
+
+
+@case("政策原文：HTML 实体解码、展示只取正文容器")
+def _policy_html_unescape():
+    html = ("<html><body><div>首页 &gt; 政务公开 &gt; 项目资金</div>"
+            "<h1>关于2026年度首台（套）重大装备认定工作的通知</h1>"
+            "<div>苏工信装备〔2026〕112号</div>"
+            "<div id='zoom'><p>各设区市工业和信息化局：</p>"
+            "<p>二、支持标准。对通过认定的首台（套）装备，按销售价格的15%给予奖励，单台最高奖励500万元。</p>"
+            "<p>三、申报主体。在江苏省境内注册、具有独立法人资格的装备制造企业，且近三年无重大失信记录。</p>"
+            "<p>四、截止时间。2026年10月25日前完成网上申报。</p>"
+            "<p>五、其他事项。本通知由江苏省工业和信息化厅负责解释。</p></div>"
+            "<div>字体 大 中 小 收藏 打印 分享</div></body></html>")
+    raw = html.encode("utf-8")
+    pages, _ = policy.read_bytes("page.html", raw)
+    text = pages[0]
+    assert "&gt;" not in text, text[:200]
+    assert "首页 > 政务公开 > 项目资金" in text, text[:200]
+    doc = policy.parse_bytes("page.html", raw)
+    # 字段抽取用全文：文号在正文容器外，仍应抽到
+    assert "苏工信装备" in (doc["f"].get("docNo") or ""), doc["f"]
+    # 展示只用正文容器：导航、字体控件、容器外文号都不进原文
+    assert "&gt;" not in doc["page"], doc["page"][:200]
+    assert "各设区市工业和信息化局" in doc["page"], doc["page"][:200]
+    assert "首页" not in doc["page"] and "字体" not in doc["page"], doc["page"][:200]
+    assert "苏工信装备" not in doc["page"], doc["page"][:200]
+
+
+def _fake_policy_doc() -> dict:
+    """一份字段齐全的官网取数记录，供批次落库与回填用例复用。"""
+    return {
+        "id": "G01",
+        "name": "广东省工业和信息化厅关于下达2026年专精特新中小企业贷款贴息奖补资金的通知",
+        "type": "HTML", "pages": 1, "real": True, "status": "ok", "conf": 0.91,
+        "f": {"issuer": "广东省工业和信息化厅", "docNo": "粤工信融资函〔2026〕88号",
+              "date": "2026-11-20", "region": "广东省", "industry": None,
+              "support": "按不超过贷款利息的30%给予贴息", "deadline": "2026-11-20"},
+        "hl": {"issuer": "广东省工业和信息化厅", "support": "按不超过贷款利息的30%给予贴息"},
+        "url": "https://gdii.gd.gov.cn/zwgk/a.html", "source": "广东省工业和信息化厅",
+        "level": "地方", "page": "各地级以上市工业和信息化局：", "pageLabel": "第 1 页",
+    }
+
+
+@case("政策批次：最近批次落库可回填，空批次不覆盖，过期不返回")
+def _policy_batch_roundtrip():
+    import shutil
+    import tempfile
+    tmpdir = pathlib.Path(tempfile.mkdtemp(prefix="mingjian_pbatch_"))
+    old_path, old_url, old_conn = store.DB_PATH, store.DB_URL, getattr(store._local, "conn", None)
+    store.DB_PATH = tmpdir / "t.db"
+    store.DB_URL = ""
+    store._local.conn = None
+    try:
+        store.init()
+        doc = _fake_policy_doc()
+        res = {"company": "比亚迪", "province": "广东省", "keywords": ["新能源汽车"],
+               "industry": "汽车整车", "docs": [doc], "stats": policy.stats([doc])}
+        govpolicy.save_last_batch(res)
+        batch = govpolicy.load_last_batch()
+        assert batch and batch["company"] == "比亚迪", batch
+        assert batch["docs"][0]["f"]["docNo"].startswith("粤工信融资函"), batch["docs"][0]["f"]
+        assert batch["stats"]["ok"] == 1 and batch["at"], batch
+        # 空批次不覆盖：没匹配到也是结论，但上一批有效结果仍应能回填
+        govpolicy.save_last_batch({"company": "比亚迪", "docs": [], "stats": {}})
+        assert govpolicy.load_last_batch()["docs"], "空批次不应覆盖旧批次"
+        # 超过回填窗口视为过期，不把陈旧结果当上次批次展示
+        raw = store.get_setting(govpolicy.LAST_BATCH_KEY)
+        raw["ts"] = raw["ts"] - (govpolicy.LAST_BATCH_HOURS + 1) * 3600
+        store.put_setting(govpolicy.LAST_BATCH_KEY, raw)
+        assert govpolicy.load_last_batch() is None
+    finally:
+        if getattr(store._local, "conn", None) is not None:
+            store._local.conn.close()
+        store._local.conn = old_conn
+        store.DB_PATH = old_path
+        store.DB_URL = old_url
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@case("政策雷达：materials 为空时 scan 回填上次批次，restore=0 不回填")
+def _policy_scan_restore():
+    import shutil
+    import tempfile
+
+    from mingjian.api.routes import policies as polroutes
+    tmpdir = pathlib.Path(tempfile.mkdtemp(prefix="mingjian_pscan_"))
+    old_path, old_url, old_conn = store.DB_PATH, store.DB_URL, getattr(store._local, "conn", None)
+    store.DB_PATH = tmpdir / "t.db"
+    store.DB_URL = ""
+    store._local.conn = None
+    empty_dir = tmpdir / "materials"
+    empty_dir.mkdir()
+    old_dir = polroutes.POLICY_DIR
+    polroutes.POLICY_DIR = empty_dir
+    try:
+        store.init()
+        doc = _fake_policy_doc()
+        govpolicy.save_last_batch({"company": "比亚迪", "docs": [doc],
+                                   "stats": policy.stats([doc])})
+        out = polroutes.policy_scan()
+        assert out["restored"] is True, out
+        assert out["docs"] and out["docs"][0]["id"] == "G01", out["docs"]
+        assert out["batch"]["company"] == "比亚迪" and out["batch"]["at"], out["batch"]
+        assert out["stats"]["ok"] == 1, out["stats"]
+        off = polroutes.policy_scan(restore="0")
+        assert off["restored"] is False and not off["docs"], off
+    finally:
+        polroutes.POLICY_DIR = old_dir
+        if getattr(store._local, "conn", None) is not None:
+            store._local.conn.close()
+        store._local.conn = old_conn
+        store.DB_PATH = old_path
+        store.DB_URL = old_url
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 # ---------------------------------------------------------------- 指标拆分

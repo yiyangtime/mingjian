@@ -17,6 +17,8 @@ import pathlib
 import re
 import zipfile
 
+from ..core import textproc
+
 FIELDS = [
     ("issuer", "发文机关"), ("docNo", "文号"), ("date", "发布日期"),
     ("region", "适用地区"), ("industry", "适用行业"),
@@ -69,7 +71,45 @@ def _strip_html(t: str) -> str:
     t = re.sub(r"<br\s*/?>", "\n", t, flags=re.I)
     t = re.sub(r"</(p|div|tr|h\d|li)>", "\n", t, flags=re.I)
     t = re.sub(r"<[^>]+>", " ", t)
-    return t.replace("&nbsp;", " ").replace("&amp;", "&")
+    # 先删标签再解实体：页面面包屑里的 &gt; 等要还原成字符，否则会原样显示在原文定位里
+    return textproc.unescape(t)
+
+
+# 政府站正文容器（TRS 模板多见 id="zoom"，也有 article-content 一类命名）
+_BODY_RE = re.compile(
+    r'<(div|section|article)\b[^>]*(?:id|class)\s*=\s*["\'][^"\']*'
+    r'(?:zoom|TRS_Editor|article[-_]?content|content[-_]?body|view[-_]?content'
+    r'|detail[-_]?content|news[-_]?content)'
+    r'[^"\']*["\'][^>]*>',
+    re.I)
+
+
+def _cut_element(html: str, start: int, tag: str) -> str:
+    """从 start（容器开始标签之后）截到同标签闭合，简单按开合计数。"""
+    depth, pat = 1, re.compile(rf"<(/?){tag}\b[^>]*>", re.I)
+    for m in pat.finditer(html, start):
+        if m.group(0).endswith("/>"):
+            continue
+        if m.group(1):
+            depth -= 1
+            if depth <= 0:
+                return html[start:m.start()]
+        else:
+            depth += 1
+    return html[start:]
+
+
+def _body_text(html: str) -> str:
+    """优先取正文容器文本，只用于「原文定位」展示，不参与字段抽取。
+
+    文号、成文日期常在正文容器外（标题下方），抽字段必须用整页文本；
+    展示则相反，带导航与「字体/收藏」控件会淹掉正文。取不到或过短就返回空串，回退整页。
+    """
+    for m in _BODY_RE.finditer(html):
+        t = norm(_strip_html(_cut_element(html, m.end(), m.group(1))))
+        if len(re.sub(r"\s", "", t)) >= 120:
+            return t
+    return ""
 
 
 def _read_docx(data: bytes) -> str:
@@ -94,7 +134,7 @@ def _read_docx(data: bytes) -> str:
 
 def _read_pdf(data: bytes) -> tuple[list[str], str]:
     """PDF 走自解析（ToUnicode CMap）。图片型 PDF 会返回空文本并如实标注。"""
-    from . import pdftext
+    from ..core import pdftext
     text = pdftext.extract_text(data)
     if text.strip():
         return [text], "自解析（ToUnicode）"
@@ -102,14 +142,22 @@ def _read_pdf(data: bytes) -> tuple[list[str], str]:
 
 
 def read_bytes(name: str, data: bytes) -> tuple[list[str], str]:
+    pages, note, _ = read_bytes_full(name, data)
+    return pages, note
+
+
+def read_bytes_full(name: str, data: bytes) -> tuple[list[str], str, str]:
+    """返回 (分页文本, 说明, 展示文本)。展示文本仅 HTML 有，供原文抽屉使用。"""
     ext = os.path.splitext(name)[1].lower()
     if ext == ".pdf":
-        return _read_pdf(data)
+        pages, note = _read_pdf(data)
+        return pages, note, ""
     if ext == ".docx":
-        return [_read_docx(data)], "zipfile"
+        return [_read_docx(data)], "zipfile", ""
     if ext in (".html", ".htm"):
-        return [_strip_html(_decode(data))], "html"
-    return [_decode(data)], "text"
+        html = _decode(data)
+        return [_strip_html(html)], "html", _body_text(html)
+    return [_decode(data)], "text", ""
 
 
 # ---------------------------------------------------------------- 规则引擎
@@ -343,8 +391,11 @@ def _page_of(pages: list[str], needle: str) -> int:
 # ---------------------------------------------------------------- 主入口
 
 def parse_text(name: str, text: str, *, pages: list[str] | None = None,
-               note: str = "文本读取", doc_id: str = "") -> dict:
-    """把一份公告文本解析成前端直接可用的记录。"""
+               note: str = "文本读取", doc_id: str = "", page_text: str = "") -> dict:
+    """把一份公告文本解析成前端直接可用的记录。
+
+    page_text 只影响「原文定位」的展示（HTML 正文容器），字段抽取始终用全文 text。
+    """
     pages = pages or [text]
     text = norm("\n".join(pages))
     doc = {
@@ -359,7 +410,7 @@ def parse_text(name: str, text: str, *, pages: list[str] | None = None,
     if len(re.sub(r"\s", "", text)) < 60:
         doc.update({"status": "failed", "conf": 0,
                     "issue": "未取得有效文本（%s），未做任何字段推测" % note,
-                    "page": text or "［无文本内容］", "pageLabel": "第 1 页"})
+                    "page": page_text or text or "［无文本内容］", "pageLabel": "第 1 页"})
         return doc
 
     dates = find_dates(text)
@@ -414,7 +465,8 @@ def parse_text(name: str, text: str, *, pages: list[str] | None = None,
 
     doc["status"] = "ok" if (filled >= 6 and not low) else "partial"
     anchor = doc["hl"].get("issuer") or doc["hl"].get("support") or ""
-    doc["page"] = text[:6000] + ("…" if len(text) > 6000 else "")
+    shown = page_text or text
+    doc["page"] = shown[:6000] + ("…" if len(shown) > 6000 else "")
     doc["pageLabel"] = "第 %d 页" % _page_of(pages, anchor)
     return _clean(doc)
 
@@ -427,10 +479,11 @@ def _clean(doc: dict) -> dict:
 
 
 def parse_bytes(name: str, data: bytes, *, doc_id: str = "") -> dict:
-    pages, note = read_bytes(name, data)
+    pages, note, display = read_bytes_full(name, data)
     if not any(p.strip() for p in pages):
-        return parse_text(name, "", pages=[], note=note, doc_id=doc_id)
-    return parse_text(name, "\n".join(pages), pages=pages, note=note, doc_id=doc_id)
+        return parse_text(name, "", pages=[], note=note, doc_id=doc_id, page_text=display)
+    return parse_text(name, "\n".join(pages), pages=pages, note=note, doc_id=doc_id,
+                      page_text=display)
 
 
 def scan_dir(dirpath: str | pathlib.Path) -> tuple[list[dict], list[str]]:

@@ -18,12 +18,25 @@ POLICY_DIR = ROOT / "materials"
 
 
 @router.get("/api/policy-radar/scan")
-def policy_scan():
+def policy_scan(restore: str = "1"):
+    """扫描 materials/；目录为空时回填最近一次官网取数批次，避免刷新即空。"""
     docs, skipped = policy.scan_dir(POLICY_DIR)
+    if not docs and truthy(restore):
+        last = govpolicy.load_last_batch()
+        if last:
+            docs = last.get("docs") or []
+            for i, d in enumerate(docs, 1):
+                d["id"] = "G%02d" % i
+            return {"docs": docs, "stats": policy.stats(docs), "skipped": skipped,
+                    "dir": "", "files": len(docs), "restored": True,
+                    "batch": {"company": last.get("company", ""),
+                              "at": last.get("at", ""),
+                              "keywords": last.get("keywords") or [],
+                              "stats": last.get("stats") or {}}}
     for i, d in enumerate(docs, 1):
         d["id"] = "D%02d" % i
     return {"docs": docs, "stats": policy.stats(docs), "skipped": skipped,
-            "dir": POLICY_DIR.name, "files": len(docs)}
+            "dir": POLICY_DIR.name, "files": len(docs), "restored": False}
 
 
 @router.get("/api/policy-radar/audit")
@@ -52,6 +65,8 @@ def gov_collect(company: str = "", refresh: str = "0", province: str = "",
         hit = govpolicy.load_cache(company)
         if hit:
             hit["cached"] = True
+            # 缓存命中同样落库：旧版本升级后第一次刷新也能回填批次
+            govpolicy.save_last_batch(hit)
             return hit
 
     ent = cninfo.resolve(company) or {"short_name": company, "code": ""}
@@ -88,6 +103,7 @@ def gov_collect(company: str = "", refresh: str = "0", province: str = "",
                 "address": prof.get("address") or sub.get("region", ""),
                 "full_name": prof.get("full_name", "")})
     govpolicy.save_cache(res)
+    govpolicy.save_last_batch(res)
     store.add_audit("policy", company, "gov_fetch",
                     f"{len(res.get('docs') or [])} 份",
                     reason=f"官网取数，检索词 {'、'.join((res.get('keywords') or [])[:4])}",

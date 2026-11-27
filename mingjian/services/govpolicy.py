@@ -22,6 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from ..core import net
 from ..core.log import get as _get_logger
+from ..infra import store
 from . import policy
 
 LOG = _get_logger("govpolicy")
@@ -360,25 +361,26 @@ def _list_province_raw(prov: str, keywords: list[str],
 
 # ---------------------------------------------------------------- 抓正文并解析
 
-def _fetch_text(item: dict) -> tuple[str, str]:
-    """返回 (正文, 说明)。"""
+def _fetch_text(item: dict) -> tuple[str, str, str]:
+    """返回 (正文, 说明, 展示文本)。展示文本只含正文容器，供原文抽屉使用。"""
     try:
         raw = _get(item["url"], timeout=25)
     except Exception as e:
-        return "", f"打不开原文（{type(e).__name__}）"
-    pages, note = policy.read_bytes("page.html", raw)
+        return "", f"打不开原文（{type(e).__name__}）", ""
+    pages, note, display = policy.read_bytes_full("page.html", raw)
     text = "\n".join(pages)
     if len(re.sub(r"\s", "", text)) < 200:
-        return "", "正文过短，可能是栏目页或需登录"
-    return text, note
+        return "", "正文过短，可能是栏目页或需登录", ""
+    return text, note, display
 
 
 def _to_doc(item: dict, idx: int) -> dict:
-    text, note = _fetch_text(item)
+    text, note, display = _fetch_text(item)
     if not text:
         item["error"] = note
         return {}
-    doc = policy.parse_text(item["title"], text, note=note, doc_id="G%02d" % idx)
+    doc = policy.parse_text(item["title"], text, note=note, doc_id="G%02d" % idx,
+                            page_text=display)
     doc["url"] = item["url"]
     doc["source"] = item["source"]
     doc["level"] = item["level"]
@@ -589,3 +591,56 @@ def load_cache(company: str, hours: int = 24) -> dict | None:
     if time.time() - d.get("at", 0) > hours * 3600:
         return None
     return d.get("result")
+
+
+# ---------------------------------------------------------------- 最近批次
+
+# 官网取数结果此前只在内存与 govpolicy.json 里，页面刷新后批次为空；这里落一份到
+# settings 表，/api/policy-radar/scan 在 materials 为空时用它回填。
+LAST_BATCH_KEY = "policy_last_batch"
+# 展示比取数缓存（24h）活得久：周五取的批次，周一回来刷新仍能看到
+LAST_BATCH_HOURS = 24 * 7
+
+
+def save_last_batch(result: dict) -> None:
+    """把最近一次官网取数批次写入 settings，刷新页面或重启进程后可回填。"""
+    docs = result.get("docs") or []
+    # 空批次不覆盖旧批次：没匹配到也是结论，但上一批有效结果仍有参考价值，
+    # 回填时会带公司名与时间，不会被误认成本次结果。
+    if not docs:
+        return
+    try:
+        store.put_setting(LAST_BATCH_KEY, {
+            "company": result.get("company") or "",
+            "province": result.get("province") or "",
+            "keywords": result.get("keywords") or [],
+            "industry": result.get("industry") or "",
+            "industry_source": result.get("industry_source") or "",
+            "address": result.get("address") or "",
+            "full_name": result.get("full_name") or "",
+            "warnings": result.get("warnings") or [],
+            "stats": result.get("stats") or policy.stats(docs),
+            "docs": docs,
+            "at": time.strftime("%Y-%m-%d %H:%M"),
+            "ts": time.time(),
+        })
+    except Exception as e:
+        # 落库失败只影响刷新回填，不能影响本次取数结果返回
+        LOG.warning("政策批次落库失败：%s", e)
+
+
+def load_last_batch(hours: int = LAST_BATCH_HOURS) -> dict | None:
+    """读最近一次批次；没有批次或超过 hours 时返回 None。"""
+    try:
+        d = store.get_setting(LAST_BATCH_KEY)
+    except Exception:
+        return None
+    if not d or not d.get("docs"):
+        return None
+    try:
+        age = time.time() - float(d.get("ts") or 0)
+    except (TypeError, ValueError):
+        return None
+    if age > hours * 3600:
+        return None
+    return d
