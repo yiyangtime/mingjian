@@ -1,4 +1,8 @@
-/** 统一 fetch 封装：非 2xx 或 {error} 一律抛错，调用侧只处理一条错误路径。 */
+/** 统一 fetch 封装：非 2xx 一律抛错，调用侧只处理一条错误路径。
+ *
+ * 200 响应也允许带 error 字段（如运行被取消：status=cancelled + error=用户取消），
+ * 这是业务状态而非请求失败，由调用方按 status/ok 自行处理，不能在这里抛掉。
+ */
 
 export class ApiError extends Error {
   status: number
@@ -17,7 +21,7 @@ async function parse<T>(r: Response): Promise<T> {
     /* 非 JSON 响应（如 502 页面）下面统一报错 */
   }
   const err = (data as { error?: string } | null)?.error
-  if (!r.ok || err) throw new ApiError(err || `请求失败（HTTP ${r.status}）`, r.status)
+  if (!r.ok) throw new ApiError(err || `请求失败（HTTP ${r.status}）`, r.status)
   return data as T
 }
 

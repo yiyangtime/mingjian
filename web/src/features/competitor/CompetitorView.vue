@@ -554,17 +554,21 @@ function startPoll(id: string, since = 0): void {
       resumable.value = d.resumable
       addLog('失败：' + (d.error || ''), 'error')
       toast('运行失败：' + (d.error || ''))
+      // 失败后停在执行过程会没有出口；回到配置页，名单与参数仍在
+      stage.value = 1
     },
     onCancelled: (d) => {
       cancelable.value = false
       running.value = false
       resumable.value = d.resumable
       toast(d.resumable ? '已取消，可从断点续跑' : '已取消；追踪报告由多家子运行组成，请重新发起')
+      stage.value = 1
     },
     onError: (err) => {
       cancelable.value = false
       running.value = false
       addLog('轮询失败：' + err.message, 'error')
+      stage.value = 1
     },
   }, since)
 }

@@ -75,8 +75,8 @@ onBeforeUnmount(() => {
           class="svc" :class="{ off: health && !health.ok, wait: !health }"
           :title="health && !health.ok ? '后端服务已断开，请确认 python -m mingjian serve 仍在运行' : '后端服务正常'"
         ><i></i>{{ health ? (health.ok ? '服务正常' : '服务断开') : '连接中' }}</span>
-        <span v-if="badge" class="badge gray">{{ badge }}</span>
-        <span v-if="state" class="badge">{{ state }}</span>
+        <span v-if="badge" class="badge gray" :title="badge">{{ badge }}</span>
+        <span v-if="state" class="badge" :title="state">{{ state }}</span>
         <span v-if="task" class="task-id">{{ task }}</span>
         <button class="help" type="button" title="使用说明" aria-label="使用说明" @click="openHelp">?</button>
       </div>
@@ -100,7 +100,9 @@ onBeforeUnmount(() => {
 }
 .hside { display: flex; align-items: center; gap: 11px; min-width: 0; }
 .hstate {
-  justify-self: end; display: flex; align-items: center; gap: 8px;
+  /* 必须占满右列：justify-self:end 会让宽度按内容撑开，长模型名会向左溢出压住导航 */
+  justify-self: stretch; width: 100%; overflow: hidden;
+  display: flex; align-items: center; gap: 8px;
   min-width: 0; flex-wrap: nowrap; justify-content: flex-end;
 }
 .logo {
@@ -118,9 +120,11 @@ onBeforeUnmount(() => {
   font-size: 11.5px; font-weight: 500; padding: 4px 10px; border-radius: 999px;
   background: var(--accent-soft); color: var(--accent); white-space: nowrap;
   border: 1px solid var(--accent-line);
-  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  flex: 0 1 auto; min-width: 0; max-width: 360px; overflow: hidden; text-overflow: ellipsis;
 }
 .badge.gray { background: #F4F6FA; color: var(--sub); border-color: var(--line); }
+/* 状态徽章不参与收缩：空间不足时只让模型名徽章省略，避免「运行中」被压成「…」 */
+.badge:not(.gray) { flex: 0 0 auto; }
 .svc {
   display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 500;
   color: var(--ok); white-space: nowrap; padding: 4px 10px; border-radius: 999px;
@@ -199,6 +203,12 @@ onBeforeUnmount(() => {
   font-weight: 600;
 }
 .nav a:focus-visible { outline: 2px solid var(--c1); outline-offset: 2px; }
+@media (max-width: 1440px) {
+  .hwrap { gap: 12px; }
+  .nav a { padding: 7px 10px; }
+  .badge { max-width: 220px; }
+}
+
 @media (max-width: 1180px) {
   .hwrap { grid-template-columns: minmax(0, 1fr) auto; row-gap: 6px; }
   .hside { grid-column: 1; }

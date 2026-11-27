@@ -310,7 +310,7 @@ def _period_report(entity: dict, period_name: str) -> dict:
     org = entity.get("org_id") or ""
     col = entity.get("column") or ""
     try:
-        from .sources import cninfo
+        from ..infra.sources import cninfo
         if not (org and col):
             ent = cninfo.resolve(code) or {}
             org = org or ent.get("org_id", "")

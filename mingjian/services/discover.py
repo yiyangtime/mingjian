@@ -235,8 +235,8 @@ def find(products: str, region: str = "", days: int = 180, limit: int = 12,
     # 3) 正文抓取：企业名几乎只在正文里出现，只看摘要会误判成「没有」
     from concurrent.futures import ThreadPoolExecutor
 
-    from . import net
-    from .textproc import extract_main, page_title
+    from ..core import net
+    from ..core.textproc import extract_main, page_title
 
     def body_of(d: dict) -> str:
         u = d.get("url") or ""

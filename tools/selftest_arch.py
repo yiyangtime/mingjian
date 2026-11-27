@@ -8,6 +8,7 @@
   路由纪律      —— 方法+路径唯一、统一 /api 前缀、按域打 tag、路由之间互不 import
   前端依赖方向  —— features 只依赖 shared 与自身；shared 不得反向依赖；视图不得直连 fetch
   路由可达性    —— features 下每个视图都必须在 router.ts 中挂载，防止拆分后成孤儿
+  import 目标    —— 相对 import 的目标模块必须真实存在，防重构后遗留 `from . import 旧模块`
   视图体积棘轮  —— 每页行数上限只降不升，新逻辑先抽组件/composable 再谈加行
 
 纯静态检查（AST + 路径解析），不依赖网络与数据库；配合 selftest_all.py 一起跑。
@@ -45,17 +46,24 @@ ROOT_WHITELIST = {"__init__.py", "__main__.py", "cli.py", "config.py", "server.p
 
 
 def _module_name(path: pathlib.Path) -> str:
-    rel = path.relative_to(PKG).with_suffix("")
+    # 统一带上包名：分层判断与 import 目标校验都按 mingjian.xxx 的绝对名工作
+    rel = path.relative_to(ROOT).with_suffix("")
     parts = list(rel.parts)
     if parts[-1] == "__init__":
         parts.pop()
     return ".".join(parts)
 
 
+def _pkg_of(path: pathlib.Path) -> list[str]:
+    """文件所在包的分段；__init__.py 自身就是包，不能再去掉末段。"""
+    parts = _module_name(path).split(".")
+    return parts if path.name == "__init__.py" else parts[:-1]
+
+
 def _imported_modules(path: pathlib.Path) -> list[tuple[str, int]]:
     """把 import / from ... import 统一解析成绝对模块名，相对导入按包深度回推。"""
     tree = ast.parse(path.read_text(encoding="utf-8"))
-    pkg = _module_name(path).split(".")[:-1]
+    pkg = _pkg_of(path)
     out: list[tuple[str, int]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
@@ -94,13 +102,16 @@ def check_backend_layers() -> None:
             target = seg[1]
             if target == "config" or (PKG / f"{target}.py").is_file():
                 continue                        # config 属于全局基础配置，各层可读
+            if target.startswith("__"):
+                continue                        # from .. import __version__：包元数据不是模块
             if target not in ALLOWED[layer]:
                 fail(f"{mod}:{lineno} 依赖越层：{layer} -> {dep}")
-            # 同级路由之间不许互相 import：共享逻辑下沉到 deps.py 或更低的层
-            if layer == "api" and target == "api" and "routes" in mod and "routes" in dep:
-                here = mod.split(".")[2:4]
-                there = dep.split(".")[2:4]
-                if here != there:
+            # 同级路由之间不许互相 import：共享逻辑下沉到 deps.py 或更低的层；
+            # routes/__init__ 是注册表，汇总各路由模块不在此列
+            if mod.startswith("mingjian.api.routes.") and dep.startswith("mingjian.api.routes."):
+                here = mod.split(".")[3] if len(mod.split(".")) > 3 else ""
+                there = dep.split(".")[3] if len(dep.split(".")) > 3 else ""
+                if here and there and here != there and there != "deps":
                     fail(f"{mod}:{lineno} 路由横向耦合：{dep}，请把共用逻辑放到 api/deps.py")
 
 
@@ -174,6 +185,42 @@ def check_frontend_layers() -> None:
             fail(f"视图未挂载：{view.relative_to(SRC).as_posix()} 不在 router.ts 中")
 
 
+# ---------------------------------------------------------------- import 目标
+
+def _module_exists(mod: str) -> bool:
+    p = PKG.joinpath(*mod.split(".")[1:])
+    return p.with_suffix(".py").is_file() or (p / "__init__.py").is_file()
+
+
+def check_import_targets() -> None:
+    """相对 import 必须指向真实存在的模块。
+
+    分层检查只看「属于哪一层」，`from . import net`（net 早已下沉到 core）之类若仍合层
+    就会漏网，只在运行到该分支时才炸——往往是构造、取数、正文抓取这类少走的路。
+    """
+    for path in sorted(PKG.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        pkg = _pkg_of(path)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom) or not node.level:
+                continue
+            base = pkg[: len(pkg) - (node.level - 1)]
+            if node.module:
+                target = ".".join(base + [node.module])
+                if not _module_exists(target):
+                    fail(f"{_module_name(path)}:{node.lineno} import 目标不存在：{target}")
+            else:
+                # from . import x：x 必须是同包的模块；__version__ 这类包属性不在此列
+                for alias in node.names:
+                    if alias.name.startswith("__"):
+                        continue
+                    target = ".".join(base + [alias.name])
+                    if not _module_exists(target):
+                        fail(f"{_module_name(path)}:{node.lineno} import 目标不存在：{target}")
+
+
 # ---------------------------------------------------------------- 视图体积
 
 # 体积棘轮：数值只允许调低。拆出组件/composable 后把上限跟着降；
@@ -206,6 +253,7 @@ def main() -> int:
     checks = [
         ("后端分层：依赖方向与包根白名单", check_backend_layers),
         ("路由纪律：唯一性、前缀、tag、横向解耦", check_routes),
+        ("import 目标：相对导入必须存在", check_import_targets),
         ("前端分层：features/shared 边界与请求收敛", check_frontend_layers),
         ("前端体积：视图行数棘轮", check_view_budget),
     ]

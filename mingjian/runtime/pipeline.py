@@ -410,13 +410,13 @@ class Pipeline:
         def work(d: dict) -> tuple[str, str]:
             url = d["url"]
             if url.lower().endswith(".pdf") or d["kind"] == "announcement":
-                from . import net
+                from ..core import net
                 data = net.fetch(url, retries=1, timeout=25).content
                 txt = pdftext.extract_text(data)
                 if pdftext.looks_like_text(txt):
                     return "full", txt
                 return "image_pdf", ""
-            from . import net
+            from ..core import net
             html = net.fetch(url, timeout=20).text
             body = extract_main(html, page_title(html))
             if cjk_count(body) >= 150:
