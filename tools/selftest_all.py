@@ -10,7 +10,7 @@
   政策取数      —— 行业词优先级、省份识别、政策标题判定、相关度打分、批次落库与回填
   竞品矩阵      —— 维度×公司对齐，空维度不占行
   技能与记忆    —— 注册表拦截、参数校验、记忆去重/召回/删除、上下文预算截断
-  调度与落库    —— 每天/每周下次触发时间、事件 seq、检查点、定时任务读写
+  调度与落库    —— 每天/每周下次触发时间、事件 seq、检查点、定时任务读写、审计分页总数
   离线优化      —— 候选校验、基线对照、门禁拒绝、草案抽取、待标注采集、上线与回滚
 
 纯函数为主，不依赖网络；联网链路由 API 冒烟另行验证。
@@ -174,6 +174,39 @@ def _policy_scan_restore():
         assert off["restored"] is False and not off["docs"], off
     finally:
         polroutes.POLICY_DIR = old_dir
+        if getattr(store._local, "conn", None) is not None:
+            store._local.conn.close()
+        store._local.conn = old_conn
+        store.DB_PATH = old_path
+        store.DB_URL = old_url
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@case("审计分页：总数不受 limit 截断，动作与关键词筛选同口径计数")
+def _audit_page_total():
+    import shutil
+    import tempfile
+    tmpdir = pathlib.Path(tempfile.mkdtemp(prefix="mingjian_audit_"))
+    old_path, old_url, old_conn = store.DB_PATH, store.DB_URL, getattr(store._local, "conn", None)
+    store.DB_PATH = tmpdir / "t.db"
+    store.DB_URL = ""
+    store._local.conn = None
+    try:
+        store.init()
+        for i in range(7):
+            store.add_audit("", "", "run" if i < 4 else "cancel", f"对象{i}",
+                            reason="失败重试" if i % 2 else "")
+        rows, total = store.audit_page(limit=3)
+        assert total == 7 and len(rows) == 3, (total, len(rows))
+        # 动作前缀筛选：总数与当页同口径，不受截断影响
+        rows, total = store.audit_page(limit=2, action="cancel")
+        assert total == 3 and len(rows) == 2, (total, len(rows))
+        # 关键词命中对象/原因；无命中返回 0 而不是当页条数
+        rows, total = store.audit_page(q="失败重试")
+        assert total == 3 and len(rows) == 3, (total, len(rows))
+        rows, total = store.audit_page(q="不存在的词")
+        assert total == 0 and not rows, (total, rows)
+    finally:
         if getattr(store._local, "conn", None) is not None:
             store._local.conn.close()
         store._local.conn = old_conn

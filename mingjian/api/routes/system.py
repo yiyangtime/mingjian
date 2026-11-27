@@ -60,16 +60,9 @@ def system_info():
 @router.get("/api/governance/audit")
 def list_audit(limit: int = 50, q: str = "", action: str = ""):
     limit = max(1, min(200, limit))
-    q, action = q.strip(), action.strip()
-    # 先多取一些再过滤：审计量小，避免为可选筛选加索引与 SQL 分支
-    rows = store.list_audit(None, max(limit * 4, 100) if (q or action) else limit)
-    if action:
-        rows = [r for r in rows if str(r.get("action") or "").startswith(action)]
-    if q:
-        rows = [r for r in rows if q in " ".join(
-            str(r.get(k) or "") for k in ("entity_key", "run_id", "action", "target", "reason", "actor"))]
+    rows, total = store.audit_page(limit, q.strip(), action.strip())
     actions = sorted({str(r.get("action") or "") for r in store.list_audit(None, 500)})
-    return {"audit": rows[:limit], "total": len(rows), "actions": actions}
+    return {"audit": rows, "total": total, "actions": actions}
 
 
 @router.post("/api/governance/audit")

@@ -38,7 +38,7 @@ npm run build                     # vue-tsc + 产出 dist，服务端直接托�
 
 ```bash
 ruff check .
-python tools/selftest_all.py      # 70 项断言
+python tools/selftest_all.py      # 71 项断言
 python tools/selftest_arch.py     # 分层边界、路由唯一性与前端体积棘轮
 cd web && npm run build           # 类型检查 + 构建
 ```

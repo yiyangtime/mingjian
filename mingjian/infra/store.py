@@ -704,6 +704,32 @@ def list_audit(entity_key: str | None = None, limit: int = 100):
     return [dict(r) for r in rows]
 
 
+def _audit_where(q: str = "", action: str = "") -> tuple[str, list]:
+    clauses, args = [], []
+    if q:
+        like = f"%{q}%"
+        op = dbmod.like_op(dialect())        # PostgreSQL 用 ILIKE，搜索不分大小写
+        clauses.append("(" + " OR ".join(
+            f"{k} {op} ?" for k in ("entity_key", "run_id", "action", "target", "reason", "actor")) + ")")
+        args += [like] * 6
+    if action:
+        clauses.append("action LIKE ?")
+        args.append(f"{action}%")
+    return (" WHERE " + " AND ".join(clauses)) if clauses else "", args
+
+
+def audit_page(limit: int = 50, q: str = "", action: str = ""):
+    """审计检索：返回当前页与命中总数，总数不受分页截断影响。"""
+    where, args = _audit_where(q, action)
+    row = conn().execute(f"SELECT COUNT(*) AS n FROM audit{where}", args).fetchone()
+    total = int(row["n"] if row else 0)
+    rows = conn().execute(
+        f"SELECT * FROM audit{where} ORDER BY id DESC LIMIT ?",
+        (*args, max(1, int(limit))),
+    ).fetchall()
+    return [dict(r) for r in rows], total
+
+
 # ---------------- run events ----------------
 
 

@@ -204,7 +204,7 @@ Telegram / 通用 Webhook 五类渠道可同时启用多个，运行结束自动
 ```bash
 python -m pip install -e ".[dev]"
 ruff check .
-python tools/selftest_all.py        # 70 项断言：抽取 / 归因 / 矩阵 / 政策 / 调度 / 落库 / 官网 / 方言 / 推送 / TLS / 限速 / 离线优化
+python tools/selftest_all.py        # 71 项断言：抽取 / 归因 / 矩阵 / 政策 / 调度 / 落库 / 官网 / 方言 / 推送 / TLS / 限速 / 离线优化
 python tools/selftest_arch.py       # 分层边界、路由唯一性、前端隔离、视图体积棘轮
 python -m mingjian db --counts      # 当前数据库、版本与各表行数
 cd web && npm ci && npm run build   # vue-tsc 类型检查 + 构建

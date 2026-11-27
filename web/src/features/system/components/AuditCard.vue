@@ -49,7 +49,7 @@ function actionLabel(a?: string): string {
   <section class="card">
     <div class="card-h">
       <h3>审计日志</h3>
-      <span class="cnt">{{ total }}</span>
+      <span class="cnt">{{ rows.length < total ? `共 ${total} 条 · 显示最近 ${rows.length} 条` : `共 ${total} 条` }}</span>
       <div class="atools">
         <input v-model="qModel" type="search" placeholder="搜动作 / 对象 / 原因 / 操作人" @keydown.enter="refresh">
         <select v-model="actionModel" @change="refresh">
